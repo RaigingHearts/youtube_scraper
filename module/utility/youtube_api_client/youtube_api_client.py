@@ -1,17 +1,5 @@
 """
-Youtube Data APIを利用するためのモジュールスクリプト。
-動画情報、チャンネル情報、コメントをAPIから取得する機能を提供する。
-モジュールタイプ：ユーティリティモジュール
-
-利用したいPythonスクリプトへインポートして利用可能:
-"import youtube_api_client"
-
-メソッド構成:
-├── "APIキーを利用してYoutubeサービスオブジェクトを構築"
-│   └── "def get_youtube_service(api_key):"
-├── "指定された動画のコメントをすべて取得する"
-│   └── "def fetch_all_comments(api_key, video_id, progress_callback=None, confirm_callback=None):"
-コピペ編集用罫線 '━┃┏┓┛┗┣┳┫┻╋' '─│┌┐┘└├┬┤┴┼'
+YouTube Data APIを利用して動画・チャンネル情報とコメントを取得するモジュール。
 """
 # youtube_api_client.py # コピーペースト作業での識別用。除去しないこと
 from __future__ import annotations
@@ -19,229 +7,245 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Optional
 
-# ロギングと通知、ユーティリティモジュールをインポート
 from module.utility.logger_config import logger_config
-from module.utility.tk_notifications import tk_notifications # TkinterのメッセージボックスなどのGUI通知用
-# utilsはyoutube_utilsに分割されたため、ここでは直接インポートしない
-# youtube_utilsは動画ID抽出に特化しているため、APIクライアント自体は直接使用しない
+from module.utility.tk_notifications import tk_notifications
 
-# Youtube Data APIクライアントライブラリ"pip install google-api-python-client"で導入して利用すべし。
-# workspacedata.txtのpip listにgoogle-api-python-clientが含まれていることを確認済み
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# APIキーは設定ファイルから取得するため、ここではプレースホルダ
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
+COMMENT_FETCH_THRESHOLD = 100
+
 
 def get_youtube_service(api_key: str) -> Any:
-    """
-    YouTube Data APIサービスオブジェクトを構築して返す。
-
-    Args:
-        api_key (str): YouTube Data APIキー。
-
-    Returns:
-        Any: 構築されたYouTube Data APIサービスオブジェクト。失敗した場合はNone。
-    """
+    """YouTube Data APIサービスオブジェクトを構築して返す。"""
     try:
         service = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=api_key)
         logger_config.log_message('info', "YouTube APIサービスオブジェクトを構築しました。")
         return service
     except Exception as e:
         logger_config.log_message('error', f"YouTube APIサービス構築エラー: {e}")
-        tk_notifications.show_error("APIエラー", f"YouTube APIサービスを構築できませんでした。\nAPIキーが正しいか確認してください。\nエラー: {e}")
+        tk_notifications.show_error(
+            "APIエラー",
+            f"YouTube APIサービスを構築できませんでした。\nAPIキーが正しいか確認してください。\nエラー: {e}"
+        )
         return None
 
-def fetch_all_comments(api_key: str, video_id: str, 
-                       progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None, 
-                       confirm_callback: Optional[Callable[[str], bool]] = None) -> tuple[dict, int, int]:
+
+def _report_api_error(title: str, message: str) -> None:
+    """API取得エラーをログとGUI通知に記録する。"""
+    logger_config.log_message('error', message)
+    tk_notifications.show_error(title, message)
+
+
+def fetch_all_comments(
+    api_key: str,
+    video_id: str,
+    progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None,
+    confirm_callback: Optional[Callable[[str], bool]] = None
+) -> tuple[dict, int, int]:
     """
-    指定された動画のコメントをすべて取得する。
-    動画情報、チャンネル情報、コメントスレッドのRawレスポンスを返す。
+    動画情報・チャンネル情報・コメントスレッドと、各スレッドの返信を取得する。
 
-    Args:
-        api_key (str): YouTube Data APIキー。
-        video_id (str): コメントを取得するYouTube動画のID。
-        progress_callback (Optional[Callable]): 進捗を更新するためのコールバック関数。
-                                                引数: (current_comments: int, total_comments: int, message: Optional[str])
-        confirm_callback (Optional[Callable]): 取得継続を確認するためのコールバック関数。
-                                               引数: (message: str) -> bool
-
-    Returns:
-        tuple[dict, int, int]:
-        - result_data (dict): 動画情報のRawレスポンス、チャンネル情報のRawレスポンス、コメントのRawレスポンスを含む辞書。
-        - comments_fetched_count (int): 実際に取得したコメント数。
-        - total_comments_expected (int): APIから取得できるコメント総数の目安（APIの制限により正確でない場合がある）。
+    既存の comment_threads_raw_responses は commentThreads.list のRawレスポンス配列として維持する。
+    返信は comment_replies_raw_responses に親コメントIDとRawレスポンスページを紐付けて格納する。
+    戻り値の3要素タプルは既存呼び出し元との互換性のため維持する。
     """
-    service: Any = get_youtube_service(api_key)
-    if not service:
-        logger_config.log_message('error', "YouTube APIサービスが利用できないため、コメント取得を中止します。")
-        return {"video_info_raw_response": {}, "channel_info_raw_response": {}, "comment_threads_raw_responses": []}, 0, 0
-
-    result_data = {
+    empty_result = {
         "video_info_raw_response": {},
         "channel_info_raw_response": {},
-        "comment_threads_raw_responses": []
+        "comment_threads_raw_responses": [],
+        "comment_replies_raw_responses": []
     }
+    service = get_youtube_service(api_key)
+    if not service:
+        logger_config.log_message('error', "YouTube APIサービスが利用できないため、コメント取得を中止します。")
+        return empty_result, 0, 0
 
+    result_data = empty_result
     comments_fetched_count = 0
-    total_comments_expected = 0
+    total_threads_expected = 0
+    total_replies_expected = 0
     next_page_token = None
-    
-    # 仮の上限値（ユーザーに確認を求めるしきい値）
-    COMMENT_FETCH_THRESHOLD = 100 
+    continuation_prompted = False
+    stop_after_current_thread_page = False
 
-    # --- 動画情報の取得 ---
+    # 動画情報
     channel_id: Optional[str] = None
     try:
-        video_request = service.videos().list(
-            part="snippet",
-            id=video_id
-        )
-        video_response = video_request.execute()
-        
+        video_response = service.videos().list(part="snippet", id=video_id).execute()
         result_data["video_info_raw_response"] = video_response
-
-        video_title = "タイトル不明"
-        channel_title = "投稿者不明"
-        if video_response and video_response.get("items"):
-            video_snippet = video_response["items"][0]["snippet"]
-            video_title = video_snippet.get("title", video_title)
-            channel_title = video_snippet.get("channelTitle", channel_title)
+        if video_response.get("items"):
+            video_snippet = video_response["items"][0].get("snippet", {})
             channel_id = video_snippet.get("channelId")
-            logger_config.log_message('info', f"動画情報取得: タイトル='{video_title}', 投稿者='{channel_title}'")
+            logger_config.log_message(
+                'info',
+                f"動画情報取得: タイトル='{video_snippet.get('title', 'タイトル不明')}', "
+                f"投稿者='{video_snippet.get('channelTitle', '投稿者不明')}'"
+            )
         else:
             logger_config.log_message('warning', f"動画ID '{video_id}' の情報が見つかりませんでした。")
-
     except HttpError as e:
-        logger_config.log_message('error', f"動画情報取得中にAPIエラーが発生しました: {e}")
-        tk_notifications.show_error("APIエラー", f"動画情報の取得中にエラーが発生しました:\n{e}")
+        _report_api_error("APIエラー", f"動画情報の取得中にAPIエラーが発生しました:\n{e}")
+        return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
     except Exception as e:
-        logger_config.log_message('error', f"動画情報取得中に予期せぬエラーが発生しました: {e}")
-        tk_notifications.show_error("エラー", f"動画情報取得中に予期せぬエラーが発生しました:\n{e}")
+        _report_api_error("エラー", f"動画情報取得中に予期せぬエラーが発生しました:\n{e}")
+        return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
 
-    # --- チャンネル情報の取得 ---
+    # チャンネル情報
     if channel_id:
         try:
-            channel_request = service.channels().list(
-                part="snippet",
-                id=channel_id
-            )
-            channel_response = channel_request.execute()
-            
-            result_data["channel_info_raw_response"] = channel_response
-            logger_config.log_message('info', f"チャンネル情報取得: チャンネルID='{channel_id}'")
+            result_data["channel_info_raw_response"] = service.channels().list(
+                part="snippet", id=channel_id
+            ).execute()
         except HttpError as e:
-            logger_config.log_message('error', f"チャンネル情報取得中にAPIエラーが発生しました: {e}")
-            tk_notifications.show_error("APIエラー", f"チャンネル情報の取得中にエラーが発生しました:\n{e}")
+            _report_api_error("APIエラー", f"チャンネル情報の取得中にAPIエラーが発生しました:\n{e}")
         except Exception as e:
-            logger_config.log_message('error', f"チャンネル情報取得中に予期せぬエラーが発生しました: {e}")
-            tk_notifications.show_error("エラー", f"チャンネル情報取得中に予期せぬエラーが発生しました:\n{e}")
-    else:
-        logger_config.log_message('warning', f"動画情報からチャンネルIDが見つからなかったため、チャンネル情報は取得されませんでした。")
+            _report_api_error("エラー", f"チャンネル情報取得中に予期せぬエラーが発生しました:\n{e}")
 
-    # --- コメントの取得 ---
+    # コメントスレッドと返信
     while True:
         try:
-            request = service.commentThreads().list(
+            response = service.commentThreads().list(
                 part="snippet,replies",
                 videoId=video_id,
                 maxResults=100,
                 pageToken=next_page_token,
                 textFormat="plainText"
-            )
-            response = request.execute()
-            
+            ).execute()
             result_data["comment_threads_raw_responses"].append(response)
 
-            for item in response.get("items", []):
-                comments_fetched_count += 1
-                if "replies" in item:
-                    comments_fetched_count += len(item["replies"].get("comments", []))
+            page_info = response.get("pageInfo", {})
+            if "totalResults" in page_info:
+                total_threads_expected = page_info["totalResults"]
 
-            if "pageInfo" in response and "totalResults" in response["pageInfo"]:
-                if total_comments_expected == 0: # 最初のページで総コメント数の目安を設定
-                    total_comments_expected = response["pageInfo"].get("totalResults", 0)
+            for thread in response.get("items", []):
+                comments_fetched_count += 1  # スレッドの親コメント
+                thread_snippet = thread.get("snippet", {})
+                reply_count = thread_snippet.get("totalReplyCount", 0) or 0
+                total_replies_expected += reply_count
+
+                if reply_count <= 0:
+                    continue
+
+                parent_comment = thread_snippet.get("topLevelComment", {})
+                parent_id = parent_comment.get("id") or thread.get("id")
+                if not parent_id:
+                    logger_config.log_message(
+                        'warning',
+                        "返信数が記録されたスレッドに親コメントIDがないため、返信取得をスキップしました。"
+                    )
+                    continue
+
+                reply_record = {"parent_id": parent_id, "raw_responses": []}
+                result_data["comment_replies_raw_responses"].append(reply_record)
+                reply_page_token = None
+
+                while True:
+                    try:
+                        reply_response = service.comments().list(
+                            part="snippet",
+                            parentId=parent_id,
+                            maxResults=100,
+                            pageToken=reply_page_token,
+                            textFormat="plainText"
+                        ).execute()
+                    except HttpError as e:
+                        logger_config.log_message(
+                            'error',
+                            f"親コメント '{parent_id}' の返信ページ取得中にAPIエラーが発生しました: {e}"
+                        )
+                        if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
+                            logger_config.log_message('critical', "返信取得中にAPIクォータ制限に達しました。")
+                        tk_notifications.show_error(
+                            "返信取得エラー",
+                            f"親コメント '{parent_id}' の返信をすべて取得できませんでした。\n"
+                            f"取得済みの返信データは保存対象に残します。\n{e}"
+                        )
+                        stop_after_current_thread_page = True
+                        break
+                    except Exception as e:
+                        logger_config.log_message(
+                            'error',
+                            f"親コメント '{parent_id}' の返信取得中に予期せぬエラーが発生しました: {e}"
+                        )
+                        tk_notifications.show_error(
+                            "返信取得エラー",
+                            f"親コメント '{parent_id}' の返信取得中にエラーが発生しました。\n{e}"
+                        )
+                        stop_after_current_thread_page = True
+                        break
+
+                    # APIレスポンスを加工せず、ページ単位でそのまま保存する
+                    reply_record["raw_responses"].append(reply_response)
+                    fetched_on_page = len(reply_response.get("items", []))
+                    comments_fetched_count += fetched_on_page
+                    if progress_callback:
+                        progress_callback(
+                            comments_fetched_count,
+                            total_threads_expected + total_replies_expected,
+                            f"返信コメント取得中... ({comments_fetched_count}件)"
+                        )
+
+                    reply_page_token = reply_response.get("nextPageToken")
+                    if not reply_page_token:
+                        break
+                    time.sleep(0.1)
+
+                if stop_after_current_thread_page:
+                    break
 
             if progress_callback:
-                # 進捗メッセージをより具体的に
-                progress_message = f"コメント取得中... ({comments_fetched_count}件)"
-                progress_callback(comments_fetched_count, total_comments_expected, progress_message)
+                progress_callback(
+                    comments_fetched_count,
+                    total_threads_expected + total_replies_expected,
+                    f"コメント取得中... ({comments_fetched_count}件)"
+                )
+
+            if stop_after_current_thread_page:
+                break
 
             next_page_token = response.get("nextPageToken")
-
-            # コメント取得上限の確認
-            if next_page_token and comments_fetched_count >= COMMENT_FETCH_THRESHOLD:
-                if confirm_callback:
-                    message = (f"現在までに {comments_fetched_count} 件のコメントを取得しました。 "
-                               f"まだコメントが残っている可能性があります。\n"
-                               f"さらにコメントの取得を続けますか？")
-                    if not confirm_callback(message):
-                        logger_config.log_message('info', "ユーザーによってコメント取得が中断されました。")
-                        break # ユーザーがキャンセルした場合
-
             if not next_page_token:
-                logger_config.log_message('info', "すべてのコメントの取得を完了しました。")
-                break # すべてのコメントを取得完了
+                logger_config.log_message('info', "コメントスレッドと返信コメントの取得を完了しました。")
+                break
+
+            if (
+                not continuation_prompted
+                and comments_fetched_count >= COMMENT_FETCH_THRESHOLD
+                and confirm_callback
+            ):
+                continuation_prompted = True
+                message = (
+                    f"現在までに {comments_fetched_count} 件のコメントを取得しました。 "
+                    "まだコメントが残っている可能性があります。\n"
+                    "さらにコメントの取得を続けますか？"
+                )
+                if not confirm_callback(message):
+                    logger_config.log_message('info', "ユーザーによってコメント取得が中断されました。")
+                    break
+
+            time.sleep(0.1)
 
         except HttpError as e:
-            logger_config.log_message('error', f"YouTube APIエラーが発生しました: {e}")
-            if e.resp.status == 403 and "quotaExceeded" in str(e):
+            logger_config.log_message('error', f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}")
+            if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
                 logger_config.log_message('critical', "APIクォータ制限に達しました。")
-                if confirm_callback:
-                    message = ("YouTube Data APIのクォータ制限に達しました。\n"
-                               "しばらく経ってから再度お試しください。\n"
-                               "プログラムを終了しますか？ (「はい」で終了、「いいえ」で続行を試みますが、再度エラーになる可能性があります)")
-                    if not confirm_callback(message):
-                        # ユーザーが「いいえ」を選択した場合、ループを抜けて終了
-                        return result_data, comments_fetched_count, total_comments_expected
-                # ユーザーが「はい」を選択した場合、または確認なしの場合、終了
-                return result_data, comments_fetched_count, total_comments_expected
-            
-            tk_notifications.show_error("APIエラー", f"YouTube APIエラーが発生しました:\n{e}")
-            return result_data, comments_fetched_count, total_comments_expected # エラー発生時はここまでで終了
-
+            tk_notifications.show_error(
+                "APIエラー",
+                f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\n{e}"
+            )
+            break
         except Exception as e:
-            logger_config.log_message('error', f"予期せぬエラーが発生しました: {e}")
-            tk_notifications.show_error("エラー", f"予期せぬエラーが発生しました:\n{e}")
-            return result_data, comments_fetched_count, total_comments_expected
+            logger_config.log_message('error', f"コメントスレッド取得中に予期せぬエラーが発生しました: {e}")
+            tk_notifications.show_error("エラー", f"コメントスレッド取得中にエラーが発生しました。\n{e}")
+            break
 
-        time.sleep(0.1) # APIリクエストの間隔を少し開ける
-
-    return result_data, comments_fetched_count, total_comments_expected
-
-# コピペ用メソッドコードの例 (使用例として)
-"""
-# モジュールのインポート設定
-import youtube_api_client
-import logger_config
-import tk_notifications # Tkinterの通知表示モジュール
-
-# 使用例 (GUIアプリケーションのバックエンド処理から呼び出すことを想定)
-def fetch_comments_for_gui(api_key, video_id, progress_label, progress_bar, master_root):
-    # 進捗更新コールバック
-    def on_progress(current, total, message):
-        master_root.after(0, lambda: progress_label.config(text=f"{message} - {current}/{total}"))
-        master_root.after(0, lambda: progress_bar.config(maximum=total, value=current))
-
-    # 確認ダイアログコールバック
-    def on_confirm(message):
-        return tk_notifications.ask_yes_no("確認", message, parent=master_root)
-
-    logger_config.log_message('info', f"GUI経由でコメント取得を開始: 動画ID='{video_id}'")
-    result_data, fetched_count, total_expected = youtube_api_client.fetch_all_comments(
-        api_key,
-        video_id,
-        progress_callback=on_progress,
-        confirm_callback=on_confirm
+    total_comments_expected = total_threads_expected + total_replies_expected
+    logger_config.log_message(
+        'info',
+        f"コメント取得終了: 取得数={comments_fetched_count}, 取得見込み={total_comments_expected}, "
+        f"返信スレッド数={len(result_data['comment_replies_raw_responses'])}"
     )
-    
-    if result_data:
-        tk_notifications.show_info("完了", f"コメント取得が完了しました。{fetched_count}件のコメントを取得。", parent=master_root)
-    else:
-        tk_notifications.show_error("エラー", "コメント取得中に問題が発生しました。ログを確認してください。", parent=master_root)
-
-# 注意: このコードはGUIアプリケーションのメインスレッドとは別のスレッドで実行されるべきです。
-# そのため、tk_async_tasksモジュールと組み合わせて使用することを推奨します。
-"""
+    return result_data, comments_fetched_count, total_comments_expected
