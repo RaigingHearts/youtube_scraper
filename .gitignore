@@ -30,3 +30,4 @@ build/
 # application template
 *.key
 *settings.json
+*.log
