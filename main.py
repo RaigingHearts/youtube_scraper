@@ -286,7 +286,10 @@ class YouTubeCommentScraperApp:
                 if fetch_status == "complete":
                     tk_notifications.show_info("取得完了", "コメントの取得が正常に完了しました。\n" + saved_summary, parent=self.master)
                 elif fetch_status == "cancelled":
-                    tk_notifications.show_warning("取得中断", "ユーザー操作により取得を中断しました。取得済みデータを保存しました。\n" + saved_summary, parent=self.master)
+                    cancellation_message = "ユーザー操作により取得を中断しました。取得済みデータを保存しました。\n" + saved_summary
+                    if error_summary:
+                        cancellation_message += "\n\n取得中に発生したエラー:\n" + error_summary
+                    tk_notifications.show_warning("取得中断", cancellation_message, parent=self.master)
                 elif fetch_status == "partial":
                     tk_notifications.show_warning("部分取得", "一部のデータを取得できませんでした。保存済みデータは部分的な内容です。\n" + saved_summary + (f"\n\nエラー:\n{error_summary}" if error_summary else ""), parent=self.master)
                 else:
@@ -295,7 +298,10 @@ class YouTubeCommentScraperApp:
             else:
                 error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
                 if fetch_status == "cancelled":
-                    tk_notifications.show_warning("取得中断", "取得を中断しました。保存できるデータはありませんでした。", parent=self.master)
+                    cancellation_message = "取得を中断しました。保存できるデータはありませんでした。"
+                    if error_summary:
+                        cancellation_message += "\n\n取得中に発生したエラー:\n" + error_summary
+                    tk_notifications.show_warning("取得中断", cancellation_message, parent=self.master)
                 else:
                     tk_notifications.show_error("取得失敗", "データを保存できませんでした。\n" + error_summary, parent=self.master)
 
@@ -309,7 +315,7 @@ class YouTubeCommentScraperApp:
         self.master.after(0, lambda: tk_async_tasks._perform_gui_update(
             self.progress_label, self.progress_bar, 
             self.progress_bar["maximum"], self.progress_bar["maximum"], # 完了状態に設定
-            "コメント取得完了またはエラー"
+            "コメント取得処理終了"
         ))
 
 
