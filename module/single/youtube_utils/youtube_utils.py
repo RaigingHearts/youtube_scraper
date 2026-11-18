@@ -15,10 +15,10 @@ YouTube関連の汎用的なユーティリティ機能を提供するモジュ�
 from __future__ import annotations
 
 import re
-import sys
-
 # ログ出力のためにlogger_configをインポート
-from module.utility.logger_config import logger_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 def extract_video_id(url: str) -> str | None:
     """
@@ -37,22 +37,22 @@ def extract_video_id(url: str) -> str | None:
     # 短縮URL (youtu.be)
     match = re.search(r'(?:https?:\/\/)?(?:www\.)?youtu\.be\/([a-zA-Z0-9_-]{11})', url)
     if match:
-        logger_config.log_message('info', f"短縮URLから動画IDを抽出しました: {match.group(1)}")
+        logger.info(f"短縮URLから動画IDを抽出しました: {match.group(1)}")
         return match.group(1)
 
     # 標準URL (youtube.com/watch?v=)
     match = re.search(r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})', url)
     if match:
-        logger_config.log_message('info', f"標準URLから動画IDを抽出しました: {match.group(1)}")
+        logger.info(f"標準URLから動画IDを抽出しました: {match.group(1)}")
         return match.group(1)
 
     # 埋め込みURL (youtube.com/embed/)
     match = re.search(r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([a-zA-Z0-9_-]{11})', url)
     if match:
-        logger_config.log_message('info', f"埋め込みURLから動画IDを抽出しました: {match.group(1)}")
+        logger.info(f"埋め込みURLから動画IDを抽出しました: {match.group(1)}")
         return match.group(1)
 
-    logger_config.log_message('warning', f"URL '{url}' から有効なYouTube動画IDを抽出できませんでした。")
+    logger.warning(f"URL '{url}' から有効なYouTube動画IDを抽出できませんでした。")
     return None # メソッド定義の末尾
 
 # コピペ用メソッドコードの例 (使用例として)
