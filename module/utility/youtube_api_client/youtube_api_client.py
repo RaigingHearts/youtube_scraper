@@ -60,6 +60,7 @@ def fetch_all_comments(
         "fetch_status": "failed",
         "errors": []
     }
+    result_data = empty_result
     service = get_youtube_service(api_key)
     if not service:
         message = "YouTube APIサービスが利用できないため、コメント取得を中止しました。"
@@ -67,7 +68,6 @@ def fetch_all_comments(
         logger_config.log_message('error', message)
         return result_data, 0, 0
 
-    result_data = empty_result
     comments_fetched_count = 0
     total_threads_expected = 0
     total_replies_expected = 0
