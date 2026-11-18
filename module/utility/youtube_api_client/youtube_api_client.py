@@ -56,12 +56,16 @@ def fetch_all_comments(
         "video_info_raw_response": {},
         "channel_info_raw_response": {},
         "comment_threads_raw_responses": [],
-        "comment_replies_raw_responses": []
+        "comment_replies_raw_responses": [],
+        "fetch_status": "failed",
+        "errors": []
     }
     service = get_youtube_service(api_key)
     if not service:
-        logger_config.log_message('error', "YouTube APIサービスが利用できないため、コメント取得を中止します。")
-        return empty_result, 0, 0
+        message = "YouTube APIサービスが利用できないため、コメント取得を中止しました。"
+        result_data["errors"].append({"stage": "service", "message": message})
+        logger_config.log_message('error', message)
+        return result_data, 0, 0
 
     result_data = empty_result
     comments_fetched_count = 0
@@ -70,6 +74,11 @@ def fetch_all_comments(
     next_page_token = None
     continuation_prompted = False
     stop_after_current_thread_page = False
+    user_cancelled = False
+    comment_threads_completed = False
+
+    def record_error(stage: str, message: str) -> None:
+        result_data["errors"].append({"stage": stage, "message": message})
 
     # 動画情報
     channel_id: Optional[str] = None
@@ -87,10 +96,14 @@ def fetch_all_comments(
         else:
             logger_config.log_message('warning', f"動画ID '{video_id}' の情報が見つかりませんでした。")
     except HttpError as e:
-        _report_api_error("APIエラー", f"動画情報の取得中にAPIエラーが発生しました:\n{e}")
+        message = f"動画情報の取得中にAPIエラーが発生しました: {e}"
+        record_error("video_info", message)
+        _report_api_error("APIエラー", message)
         return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
     except Exception as e:
-        _report_api_error("エラー", f"動画情報取得中に予期せぬエラーが発生しました:\n{e}")
+        message = f"動画情報取得中に予期せぬエラーが発生しました: {e}"
+        record_error("video_info", message)
+        _report_api_error("エラー", message)
         return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
 
     # チャンネル情報
@@ -100,9 +113,13 @@ def fetch_all_comments(
                 part="snippet", id=channel_id
             ).execute()
         except HttpError as e:
-            _report_api_error("APIエラー", f"チャンネル情報の取得中にAPIエラーが発生しました:\n{e}")
+            message = f"チャンネル情報の取得中にAPIエラーが発生しました: {e}"
+            record_error("channel_info", message)
+            _report_api_error("APIエラー", message)
         except Exception as e:
-            _report_api_error("エラー", f"チャンネル情報取得中に予期せぬエラーが発生しました:\n{e}")
+            message = f"チャンネル情報取得中に予期せぬエラーが発生しました: {e}"
+            record_error("channel_info", message)
+            _report_api_error("エラー", message)
 
     # コメントスレッドと返信
     while True:
@@ -132,10 +149,9 @@ def fetch_all_comments(
                 parent_comment = thread_snippet.get("topLevelComment", {})
                 parent_id = parent_comment.get("id") or thread.get("id")
                 if not parent_id:
-                    logger_config.log_message(
-                        'warning',
-                        "返信数が記録されたスレッドに親コメントIDがないため、返信取得をスキップしました。"
-                    )
+                    message = "返信数が記録されたスレッドに親コメントIDがないため、返信取得をスキップしました。"
+                    record_error("reply_comments", message)
+                    logger_config.log_message('warning', message)
                     continue
 
                 reply_record = {"parent_id": parent_id, "raw_responses": []}
@@ -152,10 +168,9 @@ def fetch_all_comments(
                             textFormat="plainText"
                         ).execute()
                     except HttpError as e:
-                        logger_config.log_message(
-                            'error',
-                            f"親コメント '{parent_id}' の返信ページ取得中にAPIエラーが発生しました: {e}"
-                        )
+                        message = f"親コメント '{parent_id}' の返信ページ取得中にAPIエラーが発生しました: {e}"
+                        record_error("reply_comments", message)
+                        logger_config.log_message('error', message)
                         if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
                             logger_config.log_message('critical', "返信取得中にAPIクォータ制限に達しました。")
                         tk_notifications.show_error(
@@ -166,10 +181,9 @@ def fetch_all_comments(
                         stop_after_current_thread_page = True
                         break
                     except Exception as e:
-                        logger_config.log_message(
-                            'error',
-                            f"親コメント '{parent_id}' の返信取得中に予期せぬエラーが発生しました: {e}"
-                        )
+                        message = f"親コメント '{parent_id}' の返信取得中に予期せぬエラーが発生しました: {e}"
+                        record_error("reply_comments", message)
+                        logger_config.log_message('error', message)
                         tk_notifications.show_error(
                             "返信取得エラー",
                             f"親コメント '{parent_id}' の返信取得中にエラーが発生しました。\n{e}"
@@ -208,6 +222,7 @@ def fetch_all_comments(
 
             next_page_token = response.get("nextPageToken")
             if not next_page_token:
+                comment_threads_completed = True
                 logger_config.log_message('info', "コメントスレッドと返信コメントの取得を完了しました。")
                 break
 
@@ -223,13 +238,16 @@ def fetch_all_comments(
                     "さらにコメントの取得を続けますか？"
                 )
                 if not confirm_callback(message):
+                    user_cancelled = True
                     logger_config.log_message('info', "ユーザーによってコメント取得が中断されました。")
                     break
 
             time.sleep(0.1)
 
         except HttpError as e:
-            logger_config.log_message('error', f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}")
+            message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}"
+            record_error("comment_threads", message)
+            logger_config.log_message('error', message)
             if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
                 logger_config.log_message('critical', "APIクォータ制限に達しました。")
             tk_notifications.show_error(
@@ -238,14 +256,26 @@ def fetch_all_comments(
             )
             break
         except Exception as e:
-            logger_config.log_message('error', f"コメントスレッド取得中に予期せぬエラーが発生しました: {e}")
+            message = f"コメントスレッド取得中に予期せぬエラーが発生しました: {e}"
+            record_error("comment_threads", message)
+            logger_config.log_message('error', message)
             tk_notifications.show_error("エラー", f"コメントスレッド取得中にエラーが発生しました。\n{e}")
             break
 
     total_comments_expected = total_threads_expected + total_replies_expected
+    if user_cancelled:
+        result_data["fetch_status"] = "cancelled"
+    elif result_data["errors"]:
+        result_data["fetch_status"] = "partial" if comments_fetched_count > 0 or comment_threads_completed else "failed"
+    elif comment_threads_completed:
+        result_data["fetch_status"] = "complete"
+    else:
+        result_data["fetch_status"] = "failed"
+
     logger_config.log_message(
         'info',
-        f"コメント取得終了: 取得数={comments_fetched_count}, 取得見込み={total_comments_expected}, "
+        f"コメント取得終了: 状態={result_data['fetch_status']}, 取得数={comments_fetched_count}, "
+        f"取得見込み={total_comments_expected}, "
         f"返信スレッド数={len(result_data['comment_replies_raw_responses'])}"
     )
     return result_data, comments_fetched_count, total_comments_expected
