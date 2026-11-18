@@ -9,13 +9,12 @@ import logging
 import time
 from typing import Any, Callable, Optional
 
-import logging
-
-logger = logging.getLogger(__name__)
 from module.utility.tk_notifications import tk_notifications
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+logger = logging.getLogger(__name__)
 
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
