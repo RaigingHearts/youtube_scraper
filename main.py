@@ -47,6 +47,7 @@ class YouTubeCommentScraperApp:
         self.last_saved_comment_file_path: str | None = None  # 最後に保存したコメントファイルのパス
         self.last_saved_video_info_file_path: str | None = None  # 最後に保存した動画情報ファイルのパス
         self.last_saved_channel_info_file_path: str | None = None  # 最後に保存したチャンネル情報ファイルのパス
+        self.last_saved_replies_file_path: str | None = None  # 最後に保存した返信コメントファイルのパス
 
         # アプリケーション起動時にAPIキーを確認・プロンプト
         self._initialize_api_key()
@@ -155,6 +156,7 @@ class YouTubeCommentScraperApp:
         self.last_saved_comment_file_path = None
         self.last_saved_video_info_file_path = None
         self.last_saved_channel_info_file_path = None
+        self.last_saved_replies_file_path = None
 
         # tk_async_tasksモジュールを使用して、コメント取得処理を別スレッドで実行
         tk_async_tasks.run_task_in_thread(
@@ -184,7 +186,7 @@ class YouTubeCommentScraperApp:
             ))
 
         def confirm_callback(message: str) -> bool:
-            return tk_notifications.ask_yes_no("確認", message, parent=self.master)
+            return tk_async_tasks.confirm_continuation_gui(self.master, message)
 
         result_data, fetched_count, total_expected = youtube_api_client.fetch_all_comments(
             self.api_key,
@@ -199,6 +201,7 @@ class YouTubeCommentScraperApp:
             video_info_raw_response = result_data.get("video_info_raw_response", {})
             channel_info_raw_response = result_data.get("channel_info_raw_response", {})
             comment_threads_raw_responses = result_data.get("comment_threads_raw_responses", [])
+            comment_replies_raw_responses = result_data.get("comment_replies_raw_responses", [])
 
             # --- 動画IDを名前にした専用フォルダを作成 ---
             current_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)) # メインスクリプトのディレクトリを基準とする
@@ -245,10 +248,28 @@ class YouTubeCommentScraperApp:
                 logger_config.log_message('error', f"コメントデータの保存に失敗しました。動画ID: {video_id}")
                 comments_saved = False
 
+            # --- 返信コメントデータファイルの保存 ---
+            replies_saved = False
+            replies_filename = f"comment_replies_raw_{video_id}.json"
+            if comment_replies_raw_responses:
+                if json_data_handler.save_json_to_file(
+                    comment_replies_raw_responses, replies_filename, output_dir=output_dir
+                ):
+                    logger_config.log_message(
+                        'info',
+                        f"返信コメントRawデータが '{os.path.join(output_dir, replies_filename)}' に保存されました。"
+                    )
+                    self.last_saved_replies_file_path = os.path.join(output_dir, replies_filename)
+                    replies_saved = True
+                else:
+                    logger_config.log_message('error', f"返信コメントRawデータの保存に失敗しました。動画ID: {video_id}")
+
             # 最終的なメッセージ表示ロジック
             message_parts = []
             if comments_saved:
                 message_parts.append(f"{fetched_count} 件のコメントを '{comment_filename}' に")
+            if replies_saved:
+                message_parts.append(f"返信コメントRawデータを '{replies_filename}' に")
             if video_info_saved:
                 message_parts.append(f"動画情報Rawデータを '{video_info_filename}' に")
             if channel_info_saved:
@@ -283,6 +304,8 @@ class YouTubeCommentScraperApp:
             options.append(("動画情報Rawデータファイル", self.last_saved_video_info_file_path))
         if self.last_saved_channel_info_file_path:
             options.append(("チャンネル情報Rawデータファイル", self.last_saved_channel_info_file_path))
+        if self.last_saved_replies_file_path:
+            options.append(("返信コメントRawデータファイル", self.last_saved_replies_file_path))
 
         if not options:
             tk_notifications.show_warning("ファイルが見つかりません", "保存されたJSONファイルが見つかりませんでした。", parent=self.master)
