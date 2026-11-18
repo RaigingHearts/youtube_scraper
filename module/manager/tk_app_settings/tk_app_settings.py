@@ -18,12 +18,12 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import messagebox, simpledialog
-import sys
-
 # settings_managerモジュールをインポート
 from module.manager.secure_settings import settings_manager
 # logger_configモジュールをインポート
-from module.utility.logger_config import logger_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 def check_and_prompt_api_key(master_root: tk.Tk, current_api_key: str | None = None) -> str | None:
     """
@@ -44,7 +44,7 @@ def check_and_prompt_api_key(master_root: tk.Tk, current_api_key: str | None = N
         decrypted_key = settings_manager.decrypt_api_key(settings["api_key"])
         if decrypted_key:
             api_key = decrypted_key
-            logger_config.log_message('info', "保存されたAPIキーをロードしました。")
+            logger.info("保存されたAPIキーをロードしました。")
         else:
             messagebox.showerror("APIキーエラー", "APIキーの復号化に失敗しました。再入力してください。")
             api_key = _prompt_for_api_key(master_root)
@@ -52,9 +52,9 @@ def check_and_prompt_api_key(master_root: tk.Tk, current_api_key: str | None = N
         api_key = _prompt_for_api_key(master_root)
     
     if api_key:
-        logger_config.log_message('info', "APIキーが正常に設定されました。")
+        logger.info("APIキーが正常に設定されました。")
     else:
-        logger_config.log_message('warning', "APIキーが入力されませんでした。")
+        logger.warning("APIキーが入力されませんでした。")
         # ここでmaster_root.destroy()を呼び出すと、main.py側のdestroyと重複してエラーになるため削除
     
     return api_key
@@ -75,15 +75,15 @@ def _prompt_for_api_key(master_root: tk.Tk) -> str | None:
         if encrypted_key:
             settings_manager.save_settings({"api_key": encrypted_key})
             messagebox.showinfo("APIキー保存", "APIキーが安全に保存されました。", parent=master_root)
-            logger_config.log_message('info', "新しいAPIキーが入力され、保存されました。")
+            logger.info("新しいAPIキーが入力され、保存されました。")
             return api_key_dialog
         else:
             messagebox.showerror("APIキー保存エラー", "APIキーの暗号化に失敗しました。保存できませんでした。", parent=master_root)
-            logger_config.log_message('error', "APIキーの暗号化失敗により保存できませんでした。")
+            logger.error("APIキーの暗号化失敗により保存できませんでした。")
             return None
     else:
         messagebox.showwarning("APIキーなし", "APIキーが入力されていません。機能が制限されます。", parent=master_root)
-        logger_config.log_message('warning', "APIキーの入力がキャンセルされました。")
+        logger.warning("APIキーの入力がキャンセルされました。")
         return None
 
 # コピペ用メソッドコードの例 (使用例として)
