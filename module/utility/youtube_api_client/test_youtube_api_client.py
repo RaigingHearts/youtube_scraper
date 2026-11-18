@@ -72,7 +72,89 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(fetched_count, 1)
         self.assertEqual(expected_count, 1)
         self.assertEqual(data["comment_replies_raw_responses"], [])
+        self.assertEqual(data["fetch_status"], "complete")
         service.comments.return_value.list.assert_not_called()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_comment_thread_api_failure_without_comments_is_failed(self, _show_error, get_service):
+        service = make_service({"items": []}, [])
+        service.commentThreads.return_value.list.return_value.execute.side_effect = RuntimeError(
+            "simulated thread API failure"
+        )
+        get_service.return_value = service
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments("key", "video")
+
+        self.assertEqual(data["fetch_status"], "failed")
+        self.assertEqual(data["errors"][0]["stage"], "comment_threads")
+        self.assertEqual(fetched_count, 0)
+        self.assertEqual(expected_count, 0)
+        _show_error.assert_called_once()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_service_initialization_failure_is_failed(self, _show_error, get_service):
+        get_service.return_value = None
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments("key", "video")
+
+        self.assertEqual(data["fetch_status"], "failed")
+        self.assertEqual(data["errors"][0]["stage"], "service")
+        self.assertEqual(fetched_count, 0)
+        self.assertEqual(expected_count, 0)
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_empty_comment_result_is_complete(self, _show_error, get_service):
+        service = make_service({"pageInfo": {"totalResults": 0}, "items": []}, [])
+        get_service.return_value = service
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments("key", "video")
+
+        self.assertEqual(data["fetch_status"], "complete")
+        self.assertEqual(data["errors"], [])
+        self.assertEqual(fetched_count, 0)
+        self.assertEqual(expected_count, 0)
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_missing_channel_metadata_makes_result_partial(self, _show_error, get_service):
+        service = make_service(
+            {"pageInfo": {"totalResults": 0}, "items": []},
+            []
+        )
+        service.channels.return_value.list.return_value.execute.return_value = {"items": []}
+        get_service.return_value = service
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments("key", "video")
+
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(data["errors"][0]["stage"], "channel_info")
+        self.assertEqual(fetched_count, 0)
+        self.assertEqual(expected_count, 0)
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_user_declining_continuation_is_cancelled(self, _show_error, get_service):
+        first_page = {
+            "pageInfo": {"totalResults": 101},
+            "items": [{
+                "id": f"parent-{index}",
+                "snippet": {"totalReplyCount": 0, "topLevelComment": {"id": f"parent-{index}"}}
+            } for index in range(100)],
+            "nextPageToken": "page-2"
+        }
+        service = make_service(first_page, [])
+        get_service.return_value = service
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key", "video", confirm_callback=lambda _message: False
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(fetched_count, 100)
+        self.assertEqual(expected_count, 101)
 
     @patch.object(youtube_api_client, "get_youtube_service")
     @patch.object(youtube_api_client.tk_notifications, "show_error")
@@ -99,6 +181,8 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(fetched_count, 2)
         self.assertEqual(expected_count, 3)
         self.assertEqual(data["comment_replies_raw_responses"][0]["raw_responses"], [first_reply_page])
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(data["errors"][0]["stage"], "reply_comments")
         _show_error.assert_called_once()
 
 

@@ -197,6 +197,8 @@ class YouTubeCommentScraperApp:
         
         self.total_comments_expected = total_expected
 
+        fetch_status = result_data.get("fetch_status", "failed")
+        fetch_errors = result_data.get("errors", [])
         if result_data:
             video_info_raw_response = result_data.get("video_info_raw_response", {})
             channel_info_raw_response = result_data.get("channel_info_raw_response", {})
@@ -212,13 +214,14 @@ class YouTubeCommentScraperApp:
             # json_data_handler.save_json_to_file がディレクトリ作成をサポートしているため、直接渡す
             # --- 動画情報ファイルの保存 ---
             video_info_filename = f"video_info_raw_{video_id}.json"
-            if json_data_handler.save_json_to_file(video_info_raw_response, video_info_filename, output_dir=output_dir):
-                logger_config.log_message('info', f"動画情報Rawデータが '{os.path.join(output_dir, video_info_filename)}' に保存されました。")
-                self.last_saved_video_info_file_path = os.path.join(output_dir, video_info_filename)
-                video_info_saved = True
-            else:
-                logger_config.log_message('error', f"動画情報Rawデータの保存に失敗しました。動画ID: {video_id}")
-                video_info_saved = False
+            video_info_saved = False
+            if video_info_raw_response:
+                if json_data_handler.save_json_to_file(video_info_raw_response, video_info_filename, output_dir=output_dir):
+                    logger_config.log_message('info', f"動画情報Rawデータが '{os.path.join(output_dir, video_info_filename)}' に保存されました。")
+                    self.last_saved_video_info_file_path = os.path.join(output_dir, video_info_filename)
+                    video_info_saved = True
+                else:
+                    logger_config.log_message('error', f"動画情報Rawデータの保存に失敗しました。動画ID: {video_id}")
 
             # --- チャンネル情報ファイルの保存 ---
             channel_id = None
@@ -240,13 +243,14 @@ class YouTubeCommentScraperApp:
 
             # --- コメントデータファイルの保存 ---
             comment_filename = f"comments_raw_{video_id}.json"
-            if json_data_handler.save_json_to_file(comment_threads_raw_responses, comment_filename, output_dir=output_dir):
-                logger_config.log_message('info', f"コメントデータが '{os.path.join(output_dir, comment_filename)}' に保存されました。")
-                self.last_saved_comment_file_path = os.path.join(output_dir, comment_filename)
-                comments_saved = True
-            else:
-                logger_config.log_message('error', f"コメントデータの保存に失敗しました。動画ID: {video_id}")
-                comments_saved = False
+            comments_saved = False
+            if comment_threads_raw_responses:
+                if json_data_handler.save_json_to_file(comment_threads_raw_responses, comment_filename, output_dir=output_dir):
+                    logger_config.log_message('info', f"コメントデータが '{os.path.join(output_dir, comment_filename)}' に保存されました。")
+                    self.last_saved_comment_file_path = os.path.join(output_dir, comment_filename)
+                    comments_saved = True
+                else:
+                    logger_config.log_message('error', f"コメントデータの保存に失敗しました。動画ID: {video_id}")
 
             # --- 返信コメントデータファイルの保存 ---
             replies_saved = False
@@ -277,21 +281,41 @@ class YouTubeCommentScraperApp:
                     message_parts.append(f"チャンネル情報Rawデータを '{channel_info_filename}' に")
 
             if message_parts:
-                tk_notifications.show_info("完了", f"コメントの取得が完了しました！\n" + "、\n".join(message_parts) + f"を '{output_folder_name}' フォルダに保存しました。", parent=self.master)
+                saved_summary = "、\n".join(message_parts) + f"を '{output_folder_name}' フォルダに保存しました。"
+                error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
+                if fetch_status == "complete":
+                    tk_notifications.show_info("取得完了", "コメントの取得が正常に完了しました。\n" + saved_summary, parent=self.master)
+                elif fetch_status == "cancelled":
+                    cancellation_message = "ユーザー操作により取得を中断しました。取得済みデータを保存しました。\n" + saved_summary
+                    if error_summary:
+                        cancellation_message += "\n\n取得中に発生したエラー:\n" + error_summary
+                    tk_notifications.show_warning("取得中断", cancellation_message, parent=self.master)
+                elif fetch_status == "partial":
+                    tk_notifications.show_warning("部分取得", "一部のデータを取得できませんでした。保存済みデータは部分的な内容です。\n" + saved_summary + (f"\n\nエラー:\n{error_summary}" if error_summary else ""), parent=self.master)
+                else:
+                    tk_notifications.show_error("取得失敗", "必要なデータを取得できませんでした。取得済みデータのみ保存しました。\n" + saved_summary + (f"\n\nエラー:\n{error_summary}" if error_summary else ""), parent=self.master)
                 self.master.after(0, lambda: self.open_json_button.config(state=tk.NORMAL))
             else:
-                tk_notifications.show_error("エラー", "データが一つも保存されませんでした。ログを確認してください。", parent=self.master)
+                error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
+                if fetch_status == "cancelled":
+                    cancellation_message = "取得を中断しました。保存できるデータはありませんでした。"
+                    if error_summary:
+                        cancellation_message += "\n\n取得中に発生したエラー:\n" + error_summary
+                    tk_notifications.show_warning("取得中断", cancellation_message, parent=self.master)
+                else:
+                    tk_notifications.show_error("取得失敗", "データを保存できませんでした。\n" + error_summary, parent=self.master)
 
         else:
             logger_config.log_message('error', f"コメントの取得に失敗しました。動画ID: {video_id}")
-            tk_notifications.show_error("エラー", "コメントの取得に失敗しました。ログを確認してください。", parent=self.master)
+            error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
+            tk_notifications.show_error("取得失敗", error_summary or "コメントの取得に失敗しました。ログを確認してください。", parent=self.master)
 
         # 処理完了後のGUI状態を更新
         self.master.after(0, lambda: self.scrape_button.config(state=tk.NORMAL))
         self.master.after(0, lambda: tk_async_tasks._perform_gui_update(
             self.progress_label, self.progress_bar, 
             self.progress_bar["maximum"], self.progress_bar["maximum"], # 完了状態に設定
-            "コメント取得完了またはエラー"
+            "コメント取得処理終了"
         ))
 
 
