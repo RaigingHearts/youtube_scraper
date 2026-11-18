@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import os
+import logging
 import sys
 import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # モジュールスクリプトのインポート設定
 from module.manager.secure_settings import settings_manager  # 設定管理モジュール
@@ -19,8 +22,7 @@ from module.single.json_data_handler import \
     json_data_handler  # JSONデータ操作ヘルパーモジュール (utilsから切り出し)
 from module.single.youtube_utils import \
     youtube_utils  # YouTube関連ユーティリティモジュール (utilsから切り出し)
-from module.utility.logger_config import \
-    logger_config  # ロギングモジュール (旧 log_manager)
+from module.utility.logger_config import logger_config, log_viewer  # ロギング設定・GUIログ表示
 from module.utility.tk_async_tasks import \
     tk_async_tasks  # 非同期タスク実行モジュール (スレッド、進捗更新)
 from module.utility.tk_notifications import \
@@ -66,9 +68,9 @@ class YouTubeCommentScraperApp:
         self.api_key = tk_app_settings.check_and_prompt_api_key(self.master, self.api_key)
         # tk_app_settings内でdestroyは行わないため、ここでapi_keyがNoneの場合の処理を続ける
         if self.api_key:
-            logger_config.log_message('info', "APIキーが正常に設定されました。")
+            logger.info("APIキーが正常に設定されました。")
         else:
-            logger_config.log_message('critical', "APIキーが設定されませんでした。アプリケーションのGUIは構築されません。")
+            logger.critical("APIキーが設定されませんでした。アプリケーションのGUIは構築されません。")
             # APIキーがない場合は_create_widgetsを呼び出さないため、ここで終了
 
     def _create_widgets(self):
@@ -113,7 +115,7 @@ class YouTubeCommentScraperApp:
         self.open_json_button = ttk.Button(result_frame, text="取得完了JSONファイルを開く", command=self._open_json_file, state=tk.DISABLED)
         self.open_json_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.show_log_button = ttk.Button(result_frame, text="ログを表示", command=logger_config.show_log_window)
+        self.show_log_button = ttk.Button(result_frame, text="ログを表示", command=lambda: log_viewer.show_log_window(self.master))
         self.show_log_button.pack(side=tk.LEFT, padx=5, pady=5)
 
     def _parse_url_event(self, event: Any):
@@ -134,7 +136,7 @@ class YouTubeCommentScraperApp:
             tk_notifications.show_info("解析完了", f"動画ID: {video_id} を解析しました。", parent=self.master)
         else:
             tk_notifications.show_error("解析失敗", "有効なYouTube URLではありません。", parent=self.master)
-            logger_config.log_message('error', f"URL解析失敗: {url}")
+            logger.error(f"URL解析失敗: {url}")
 
     def _start_scrape_process(self):
         """コメント取得処理を別スレッドで開始する。"""
@@ -170,7 +172,7 @@ class YouTubeCommentScraperApp:
         コメント取得のメイン処理（別スレッドで実行される）。
         youtube_api_clientと連携し、進捗をGUIに反映させる。
         """
-        logger_config.log_message('info', f"動画ID '{video_id}' のコメント取得タスクを開始します。")
+        logger.info(f"動画ID '{video_id}' のコメント取得タスクを開始します。")
 
         # APIキーは_initialize_api_keyで設定済みのはず
         assert self.api_key is not None, "APIキーがNoneです。これは初期化で防がれるべきです。"
@@ -217,11 +219,11 @@ class YouTubeCommentScraperApp:
             video_info_saved = False
             if video_info_raw_response:
                 if json_data_handler.save_json_to_file(video_info_raw_response, video_info_filename, output_dir=output_dir):
-                    logger_config.log_message('info', f"動画情報Rawデータが '{os.path.join(output_dir, video_info_filename)}' に保存されました。")
+                    logger.info(f"動画情報Rawデータが '{os.path.join(output_dir, video_info_filename)}' に保存されました。")
                     self.last_saved_video_info_file_path = os.path.join(output_dir, video_info_filename)
                     video_info_saved = True
                 else:
-                    logger_config.log_message('error', f"動画情報Rawデータの保存に失敗しました。動画ID: {video_id}")
+                    logger.error(f"動画情報Rawデータの保存に失敗しました。動画ID: {video_id}")
 
             # --- チャンネル情報ファイルの保存 ---
             channel_id = None
@@ -233,24 +235,24 @@ class YouTubeCommentScraperApp:
             if channel_id:
                 channel_info_filename = f"channel_info_raw_{channel_id}.json"
                 if json_data_handler.save_json_to_file(channel_info_raw_response, channel_info_filename, output_dir=output_dir):
-                    logger_config.log_message('info', f"チャンネル情報Rawデータが '{os.path.join(output_dir, channel_info_filename)}' に保存されました。")
+                    logger.info(f"チャンネル情報Rawデータが '{os.path.join(output_dir, channel_info_filename)}' に保存されました。")
                     self.last_saved_channel_info_file_path = os.path.join(output_dir, channel_info_filename)
                     channel_info_saved = True
                 else:
-                    logger_config.log_message('error', f"チャンネル情報Rawデータの保存に失敗しました。チャンネルID: {channel_id}")
+                    logger.error(f"チャンネル情報Rawデータの保存に失敗しました。チャンネルID: {channel_id}")
             else:
-                logger_config.log_message('warning', f"チャンネルIDが不明なため、チャンネル情報Rawデータの保存はスキップされました。")
+                logger.warning(f"チャンネルIDが不明なため、チャンネル情報Rawデータの保存はスキップされました。")
 
             # --- コメントデータファイルの保存 ---
             comment_filename = f"comments_raw_{video_id}.json"
             comments_saved = False
             if comment_threads_raw_responses:
                 if json_data_handler.save_json_to_file(comment_threads_raw_responses, comment_filename, output_dir=output_dir):
-                    logger_config.log_message('info', f"コメントデータが '{os.path.join(output_dir, comment_filename)}' に保存されました。")
+                    logger.info(f"コメントデータが '{os.path.join(output_dir, comment_filename)}' に保存されました。")
                     self.last_saved_comment_file_path = os.path.join(output_dir, comment_filename)
                     comments_saved = True
                 else:
-                    logger_config.log_message('error', f"コメントデータの保存に失敗しました。動画ID: {video_id}")
+                    logger.error(f"コメントデータの保存に失敗しました。動画ID: {video_id}")
 
             # --- 返信コメントデータファイルの保存 ---
             replies_saved = False
@@ -259,14 +261,12 @@ class YouTubeCommentScraperApp:
                 if json_data_handler.save_json_to_file(
                     comment_replies_raw_responses, replies_filename, output_dir=output_dir
                 ):
-                    logger_config.log_message(
-                        'info',
-                        f"返信コメントRawデータが '{os.path.join(output_dir, replies_filename)}' に保存されました。"
+                    logger.info(f"返信コメントRawデータが '{os.path.join(output_dir, replies_filename)}' に保存されました。"
                     )
                     self.last_saved_replies_file_path = os.path.join(output_dir, replies_filename)
                     replies_saved = True
                 else:
-                    logger_config.log_message('error', f"返信コメントRawデータの保存に失敗しました。動画ID: {video_id}")
+                    logger.error(f"返信コメントRawデータの保存に失敗しました。動画ID: {video_id}")
 
             # 最終的なメッセージ表示ロジック
             message_parts = []
@@ -323,7 +323,7 @@ class YouTubeCommentScraperApp:
                     tk_notifications.show_error("取得失敗", "データを保存できませんでした。\n" + error_summary, parent=self.master)
 
         else:
-            logger_config.log_message('error', f"コメントの取得に失敗しました。動画ID: {video_id}")
+            logger.error(f"コメントの取得に失敗しました。動画ID: {video_id}")
             error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
             tk_notifications.show_error("取得失敗", error_summary or "コメントの取得に失敗しました。ログを確認してください。", parent=self.master)
 
@@ -350,7 +350,7 @@ class YouTubeCommentScraperApp:
 
         if not options:
             tk_notifications.show_warning("ファイルが見つかりません", "保存されたJSONファイルが見つかりませんでした。", parent=self.master)
-            logger_config.log_message('warning', "開くべきJSONファイルが見つかりませんでした。")
+            logger.warning("開くべきJSONファイルが見つかりませんでした。")
             return
 
         # tk_notificationsモジュールを使用してファイル選択ダイアログを表示
@@ -359,10 +359,17 @@ class YouTubeCommentScraperApp:
         if selected_path:
             file_operations.open_file_in_default_app(selected_path) # file_operationsを使用
         else:
-            logger_config.log_message('info', "ファイル選択がキャンセルされました。")
+            logger.info("ファイル選択がキャンセルされました。")
+
+
+def main() -> None:
+    """アプリケーションを初期化してGUIを起動する。"""
+    logger_config.configure_logging()
+    settings_manager.initialize_settings()
+    root = tk.Tk()
+    YouTubeCommentScraperApp(root)
+    root.mainloop()
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = YouTubeCommentScraperApp(root)
-    root.mainloop()
+    main()
