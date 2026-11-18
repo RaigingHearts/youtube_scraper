@@ -4,6 +4,7 @@ YouTube Data APIを利用して動画・チャンネル情報とコメントを�
 # youtube_api_client.py # コピーペースト作業での識別用。除去しないこと
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Callable, Optional
 
@@ -37,6 +38,24 @@ def _report_api_error(title: str, message: str) -> None:
     """API取得エラーをログとGUI通知に記録する。"""
     logger_config.log_message('error', message)
     tk_notifications.show_error(title, message)
+
+
+def _get_api_error_reason(error: HttpError) -> Optional[str]:
+    """HttpErrorのレスポンス本文からYouTube APIのエラーreasonを取得する。"""
+    try:
+        content = error.content
+        if isinstance(content, bytes):
+            content = content.decode("utf-8")
+        payload = json.loads(content)
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+
+    error_details = payload.get("error", {}).get("errors", [])
+    for detail in error_details:
+        reason = detail.get("reason")
+        if reason:
+            return reason
+    return None
 
 
 def fetch_all_comments(
@@ -76,6 +95,7 @@ def fetch_all_comments(
     stop_after_current_thread_page = False
     user_cancelled = False
     comment_threads_completed = False
+    comments_disabled = False
 
     def record_error(stage: str, message: str) -> None:
         result_data["errors"].append({"stage": stage, "message": message})
@@ -257,15 +277,25 @@ def fetch_all_comments(
             time.sleep(0.1)
 
         except HttpError as e:
-            message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}"
-            record_error("comment_threads", message)
-            logger_config.log_message('error', message)
-            if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
-                logger_config.log_message('critical', "APIクォータ制限に達しました。")
-            tk_notifications.show_error(
-                "APIエラー",
-                f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\n{e}"
-            )
+            if _get_api_error_reason(e) == "commentsDisabled":
+                comments_disabled = True
+                message = "この動画ではコメントがオフに設定されているため、コメントを取得できません。"
+                result_data["errors"].append({
+                    "stage": "comment_threads",
+                    "reason": "commentsDisabled",
+                    "message": message
+                })
+                logger_config.log_message('warning', f"{message} (API reason: commentsDisabled)")
+            else:
+                message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}"
+                record_error("comment_threads", message)
+                logger_config.log_message('error', message)
+                if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
+                    logger_config.log_message('critical', "APIクォータ制限に達しました。")
+                tk_notifications.show_error(
+                    "APIエラー",
+                    f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\n{e}"
+                )
             break
         except Exception as e:
             message = f"コメントスレッド取得中に予期せぬエラーが発生しました: {e}"
@@ -279,7 +309,9 @@ def fetch_all_comments(
     total_comments_expected = (
         total_threads_expected + total_replies_expected if comment_threads_completed else 0
     )
-    if user_cancelled:
+    if comments_disabled:
+        result_data["fetch_status"] = "comments_disabled"
+    elif user_cancelled:
         result_data["fetch_status"] = "cancelled"
     elif result_data["errors"]:
         result_data["fetch_status"] = "partial" if comments_fetched_count > 0 or comment_threads_completed else "failed"
