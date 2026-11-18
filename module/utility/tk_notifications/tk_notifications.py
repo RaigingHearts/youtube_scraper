@@ -28,10 +28,10 @@ import os
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import List, Tuple, Any, Optional
-import sys
-
 # ログ出力のためにlogger_configをインポート
-from module.utility.logger_config import logger_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 def show_info(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel] = None):
     """
@@ -42,7 +42,7 @@ def show_info(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel] = 
         message (str): 表示するメッセージ。
         parent (Optional[tk.Tk | tk.Toplevel]): 親ウィンドウ。
     """
-    logger_config.log_message('info', f"GUI情報メッセージ: {title} - {message}")
+    logger.info(f"GUI情報メッセージ: {title} - {message}")
     messagebox.showinfo(title, message, parent=parent)
 
 def show_warning(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel] = None):
@@ -54,7 +54,7 @@ def show_warning(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel]
         message (str): 表示するメッセージ。
         parent (Optional[tk.Tk | tk.Toplevel]): 親ウィンドウ。
     """
-    logger_config.log_message('warning', f"GUI警告メッセージ: {title} - {message}")
+    logger.warning(f"GUI警告メッセージ: {title} - {message}")
     messagebox.showwarning(title, message, parent=parent)
 
 def show_error(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel] = None):
@@ -66,7 +66,7 @@ def show_error(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel] =
         message (str): 表示するメッセージ。
         parent (Optional[tk.Tk | tk.Toplevel]): 親ウィンドウ。
     """
-    logger_config.log_message('error', f"GUIエラーメッセージ: {title} - {message}")
+    logger.error(f"GUIエラーメッセージ: {title} - {message}")
     messagebox.showerror(title, message, parent=parent)
 
 def ask_yes_no(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel] = None) -> bool:
@@ -81,7 +81,7 @@ def ask_yes_no(title: str, message: str, parent: Optional[tk.Tk | tk.Toplevel] =
     Returns:
         bool: ユーザーが「はい」を選択した場合はTrue、それ以外はFalse。
     """
-    logger_config.log_message('info', f"GUI確認ダイアログ: {title} - {message}")
+    logger.info(f"GUI確認ダイアログ: {title} - {message}")
     return messagebox.askyesno(title, message, parent=parent)
 
 def ask_string(title: str, prompt: str, initialvalue: Optional[str] = None, show: str = '*', parent: Optional[tk.Tk | tk.Toplevel] = None) -> Optional[str]:
@@ -98,7 +98,7 @@ def ask_string(title: str, prompt: str, initialvalue: Optional[str] = None, show
     Returns:
         Optional[str]: 入力された文字列。キャンセルされた場合はNone。
     """
-    logger_config.log_message('info', f"GUI文字列入力ダイアログ: {title} - {prompt}")
+    logger.info(f"GUI文字列入力ダイアログ: {title} - {prompt}")
     return simpledialog.askstring(title, prompt, initialvalue=initialvalue, show=show, parent=parent)
 
 def show_file_selection_dialog(master_root: tk.Tk, title: str, options: List[Tuple[str, str]]) -> Optional[str]:
@@ -113,11 +113,11 @@ def show_file_selection_dialog(master_root: tk.Tk, title: str, options: List[Tup
     Returns:
         Optional[str]: 選択されたファイルのパス。キャンセルされた場合はNone。
     """
-    logger_config.log_message('info', f"GUIファイル選択ダイアログ表示: {title}")
+    logger.info(f"GUIファイル選択ダイアログ表示: {title}")
 
     if not options:
         show_warning("ファイルが見つかりません", "開くべきファイルが指定されていません。", parent=master_root)
-        logger_config.log_message('warning', "ファイル選択ダイアログにオプションが提供されませんでした。")
+        logger.warning("ファイル選択ダイアログにオプションが提供されませんでした。")
         return None
 
     # 選択肢が一つだけなら直接開く
@@ -156,7 +156,7 @@ def show_file_selection_dialog(master_root: tk.Tk, title: str, options: List[Tup
     # ウィンドウが閉じるまで待機
     master_root.wait_window(choice_window) 
     
-    logger_config.log_message('info', f"ファイル選択ダイアログで '{result_path}' が選択されました。")
+    logger.info(f"ファイル選択ダイアログで '{result_path}' が選択されました。")
     return result_path
 
 # コピペ用メソッドコードの例 (使用例として)
