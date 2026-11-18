@@ -182,7 +182,7 @@ class YouTubeCommentScraperApp:
                 current_comments, total_comments, message
             )
             self.master.after(0, lambda: self.comment_count_label.config(
-                text=(f"取得コメント数: {current_comments} / {total_comments}"\n                      if total_comments is not None else f"取得コメント数: {current_comments} / 確定待ち")
+                text=(f"取得コメント数: {current_comments} / {total_comments}" if total_comments is not None else f"取得コメント数: {current_comments} / 確定待ち")
             ))
 
         def confirm_callback(message: str) -> bool:
