@@ -31,3 +31,4 @@ build/
 *.key
 *settings.json
 *.log
+youtube_data_*/
