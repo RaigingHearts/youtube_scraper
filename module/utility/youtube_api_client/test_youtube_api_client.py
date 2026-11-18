@@ -119,6 +119,23 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
 
     @patch.object(youtube_api_client, "get_youtube_service")
     @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_missing_channel_metadata_makes_result_partial(self, _show_error, get_service):
+        service = make_service(
+            {"pageInfo": {"totalResults": 0}, "items": []},
+            []
+        )
+        service.channels.return_value.list.return_value.execute.return_value = {"items": []}
+        get_service.return_value = service
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments("key", "video")
+
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(data["errors"][0]["stage"], "channel_info")
+        self.assertEqual(fetched_count, 0)
+        self.assertEqual(expected_count, 0)
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
     def test_user_declining_continuation_is_cancelled(self, _show_error, get_service):
         first_page = {
             "pageInfo": {"totalResults": 101},
