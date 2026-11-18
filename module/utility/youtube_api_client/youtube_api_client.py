@@ -277,15 +277,28 @@ def fetch_all_comments(
             time.sleep(0.1)
 
         except HttpError as e:
-            if _get_api_error_reason(e) == "commentsDisabled":
+            api_error_reason = _get_api_error_reason(e)
+            if api_error_reason == "commentsDisabled":
                 comments_disabled = True
                 message = "この動画ではコメントがオフに設定されているため、コメントを取得できません。"
                 result_data["errors"].append({
                     "stage": "comment_threads",
-                    "reason": "commentsDisabled",
+                    "reason": api_error_reason,
                     "message": message
                 })
-                logger_config.log_message('warning', f"{message} (API reason: commentsDisabled)")
+                logger_config.log_message('warning', f"{message} (API reason: {api_error_reason})")
+            elif api_error_reason == "videoNotFound":
+                message = (
+                    "動画を確認できませんでした。投稿されている動画の削除、URLや動画IDの間違い・"
+                    "ミスコピー、投稿者による非公開設定などの可能性があります。"
+                )
+                result_data["errors"].append({
+                    "stage": "comment_threads",
+                    "reason": api_error_reason,
+                    "message": message
+                })
+                logger_config.log_message('warning', f"{message} (API reason: {api_error_reason})")
+                tk_notifications.show_warning("動画を確認できません", message)
             else:
                 message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}"
                 record_error("comment_threads", message)
