@@ -197,6 +197,8 @@ class YouTubeCommentScraperApp:
         
         self.total_comments_expected = total_expected
 
+        fetch_status = result_data.get("fetch_status", "failed")
+        fetch_errors = result_data.get("errors", [])
         if result_data:
             video_info_raw_response = result_data.get("video_info_raw_response", {})
             channel_info_raw_response = result_data.get("channel_info_raw_response", {})
@@ -277,14 +279,28 @@ class YouTubeCommentScraperApp:
                     message_parts.append(f"チャンネル情報Rawデータを '{channel_info_filename}' に")
 
             if message_parts:
-                tk_notifications.show_info("完了", f"コメントの取得が完了しました！\n" + "、\n".join(message_parts) + f"を '{output_folder_name}' フォルダに保存しました。", parent=self.master)
+                saved_summary = "、\n".join(message_parts) + f"を '{output_folder_name}' フォルダに保存しました。"
+                error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
+                if fetch_status == "complete":
+                    tk_notifications.show_info("取得完了", "コメントの取得が正常に完了しました。\n" + saved_summary, parent=self.master)
+                elif fetch_status == "cancelled":
+                    tk_notifications.show_warning("取得中断", "ユーザー操作により取得を中断しました。取得済みデータを保存しました。\n" + saved_summary, parent=self.master)
+                elif fetch_status == "partial":
+                    tk_notifications.show_warning("部分取得", "一部のデータを取得できませんでした。保存済みデータは部分的な内容です。\n" + saved_summary + (f"\n\nエラー:\n{error_summary}" if error_summary else ""), parent=self.master)
+                else:
+                    tk_notifications.show_error("取得失敗", "必要なデータを取得できませんでした。取得済みデータのみ保存しました。\n" + saved_summary + (f"\n\nエラー:\n{error_summary}" if error_summary else ""), parent=self.master)
                 self.master.after(0, lambda: self.open_json_button.config(state=tk.NORMAL))
             else:
-                tk_notifications.show_error("エラー", "データが一つも保存されませんでした。ログを確認してください。", parent=self.master)
+                error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
+                if fetch_status == "cancelled":
+                    tk_notifications.show_warning("取得中断", "取得を中断しました。保存できるデータはありませんでした。", parent=self.master)
+                else:
+                    tk_notifications.show_error("取得失敗", "データを保存できませんでした。\n" + error_summary, parent=self.master)
 
         else:
             logger_config.log_message('error', f"コメントの取得に失敗しました。動画ID: {video_id}")
-            tk_notifications.show_error("エラー", "コメントの取得に失敗しました。ログを確認してください。", parent=self.master)
+            error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
+            tk_notifications.show_error("取得失敗", error_summary or "コメントの取得に失敗しました。ログを確認してください。", parent=self.master)
 
         # 処理完了後のGUI状態を更新
         self.master.after(0, lambda: self.scrape_button.config(state=tk.NORMAL))
