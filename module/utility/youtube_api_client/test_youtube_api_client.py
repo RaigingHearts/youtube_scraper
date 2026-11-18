@@ -310,5 +310,33 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(expected_count, 0)
         show_error.assert_called_once()
 
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    @patch.object(youtube_api_client.tk_notifications, "show_warning")
+    def test_video_not_found_error_has_actionable_guidance(
+        self, show_warning, show_error, get_service
+    ):
+        service = make_service({"items": []}, [])
+        service.videos.return_value.list.return_value.execute.return_value = {"items": []}
+        service.commentThreads.return_value.list.return_value.execute.side_effect = HttpError(
+            resp=MagicMock(status=404),
+            content=b'{"error":{"errors":[{"reason":"videoNotFound"}]}}'
+        )
+        get_service.return_value = service
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments("key", "video")
+
+        self.assertEqual(data["fetch_status"], "failed")
+        self.assertEqual(data["errors"][-1]["stage"], "comment_threads")
+        self.assertEqual(data["errors"][-1]["reason"], "videoNotFound")
+        self.assertIn("動画の削除", data["errors"][-1]["message"])
+        self.assertIn("URLや動画IDの間違い", data["errors"][-1]["message"])
+        self.assertIn("非公開設定", data["errors"][-1]["message"])
+        self.assertEqual(fetched_count, 0)
+        self.assertEqual(expected_count, 0)
+        show_warning.assert_called_once()
+        show_error.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
