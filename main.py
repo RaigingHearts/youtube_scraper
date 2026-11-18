@@ -214,13 +214,14 @@ class YouTubeCommentScraperApp:
             # json_data_handler.save_json_to_file がディレクトリ作成をサポートしているため、直接渡す
             # --- 動画情報ファイルの保存 ---
             video_info_filename = f"video_info_raw_{video_id}.json"
-            if json_data_handler.save_json_to_file(video_info_raw_response, video_info_filename, output_dir=output_dir):
-                logger_config.log_message('info', f"動画情報Rawデータが '{os.path.join(output_dir, video_info_filename)}' に保存されました。")
-                self.last_saved_video_info_file_path = os.path.join(output_dir, video_info_filename)
-                video_info_saved = True
-            else:
-                logger_config.log_message('error', f"動画情報Rawデータの保存に失敗しました。動画ID: {video_id}")
-                video_info_saved = False
+            video_info_saved = False
+            if video_info_raw_response:
+                if json_data_handler.save_json_to_file(video_info_raw_response, video_info_filename, output_dir=output_dir):
+                    logger_config.log_message('info', f"動画情報Rawデータが '{os.path.join(output_dir, video_info_filename)}' に保存されました。")
+                    self.last_saved_video_info_file_path = os.path.join(output_dir, video_info_filename)
+                    video_info_saved = True
+                else:
+                    logger_config.log_message('error', f"動画情報Rawデータの保存に失敗しました。動画ID: {video_id}")
 
             # --- チャンネル情報ファイルの保存 ---
             channel_id = None
@@ -242,13 +243,14 @@ class YouTubeCommentScraperApp:
 
             # --- コメントデータファイルの保存 ---
             comment_filename = f"comments_raw_{video_id}.json"
-            if json_data_handler.save_json_to_file(comment_threads_raw_responses, comment_filename, output_dir=output_dir):
-                logger_config.log_message('info', f"コメントデータが '{os.path.join(output_dir, comment_filename)}' に保存されました。")
-                self.last_saved_comment_file_path = os.path.join(output_dir, comment_filename)
-                comments_saved = True
-            else:
-                logger_config.log_message('error', f"コメントデータの保存に失敗しました。動画ID: {video_id}")
-                comments_saved = False
+            comments_saved = False
+            if comment_threads_raw_responses:
+                if json_data_handler.save_json_to_file(comment_threads_raw_responses, comment_filename, output_dir=output_dir):
+                    logger_config.log_message('info', f"コメントデータが '{os.path.join(output_dir, comment_filename)}' に保存されました。")
+                    self.last_saved_comment_file_path = os.path.join(output_dir, comment_filename)
+                    comments_saved = True
+                else:
+                    logger_config.log_message('error', f"コメントデータの保存に失敗しました。動画ID: {video_id}")
 
             # --- 返信コメントデータファイルの保存 ---
             replies_saved = False
