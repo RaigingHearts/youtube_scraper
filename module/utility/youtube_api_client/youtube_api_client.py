@@ -5,10 +5,13 @@ YouTube Data APIを利用して動画・チャンネル情報とコメントを�
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Callable, Optional
 
-from module.utility.logger_config import logger_config
+import logging
+
+logger = logging.getLogger(__name__)
 from module.utility.tk_notifications import tk_notifications
 
 from googleapiclient.discovery import build
@@ -23,10 +26,10 @@ def get_youtube_service(api_key: str) -> Any:
     """YouTube Data APIサービスオブジェクトを構築して返す。"""
     try:
         service = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=api_key)
-        logger_config.log_message('info', "YouTube APIサービスオブジェクトを構築しました。")
+        logger.info("YouTube APIサービスオブジェクトを構築しました。")
         return service
     except Exception as e:
-        logger_config.log_message('error', f"YouTube APIサービス構築エラー: {e}")
+        logger.error(f"YouTube APIサービス構築エラー: {e}")
         tk_notifications.show_error(
             "APIエラー",
             f"YouTube APIサービスを構築できませんでした。\nAPIキーが正しいか確認してください。\nエラー: {e}"
@@ -36,7 +39,7 @@ def get_youtube_service(api_key: str) -> Any:
 
 def _report_api_error(title: str, message: str) -> None:
     """API取得エラーをログとGUI通知に記録する。"""
-    logger_config.log_message('error', message)
+    logger.error(message)
     tk_notifications.show_error(title, message)
 
 
@@ -84,7 +87,7 @@ def fetch_all_comments(
     if not service:
         message = "YouTube APIサービスが利用できないため、コメント取得を中止しました。"
         result_data["errors"].append({"stage": "service", "message": message})
-        logger_config.log_message('error', message)
+        logger.error(message)
         return result_data, 0, 0
 
     comments_fetched_count = 0
@@ -108,15 +111,13 @@ def fetch_all_comments(
         if video_response.get("items"):
             video_snippet = video_response["items"][0].get("snippet", {})
             channel_id = video_snippet.get("channelId")
-            logger_config.log_message(
-                'info',
-                f"動画情報取得: タイトル='{video_snippet.get('title', 'タイトル不明')}', "
+            logger.info(f"動画情報取得: タイトル='{video_snippet.get('title', 'タイトル不明')}', "
                 f"投稿者='{video_snippet.get('channelTitle', '投稿者不明')}'"
             )
         else:
             message = f"動画ID '{video_id}' の情報が見つかりませんでした。"
             record_error("video_info", message)
-            logger_config.log_message('warning', message)
+            logger.warning(message)
     except HttpError as e:
         message = f"動画情報の取得中にAPIエラーが発生しました: {e}"
         record_error("video_info", message)
@@ -137,7 +138,7 @@ def fetch_all_comments(
             if not result_data["channel_info_raw_response"].get("items"):
                 message = f"チャンネルID '{channel_id}' の情報が見つかりませんでした。"
                 record_error("channel_info", message)
-                logger_config.log_message('warning', message)
+                logger.warning(message)
         except HttpError as e:
             message = f"チャンネル情報の取得中にAPIエラーが発生しました: {e}"
             record_error("channel_info", message)
@@ -185,7 +186,7 @@ def fetch_all_comments(
                 if not parent_id:
                     message = "返信数が記録されたスレッドに親コメントIDがないため、返信取得をスキップしました。"
                     record_error("reply_comments", message)
-                    logger_config.log_message('warning', message)
+                    logger.warning(message)
                     continue
 
                 reply_record = {"parent_id": parent_id, "raw_responses": []}
@@ -204,9 +205,9 @@ def fetch_all_comments(
                     except HttpError as e:
                         message = f"親コメント '{parent_id}' の返信ページ取得中にAPIエラーが発生しました: {e}"
                         record_error("reply_comments", message)
-                        logger_config.log_message('error', message)
+                        logger.error(message)
                         if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
-                            logger_config.log_message('critical', "返信取得中にAPIクォータ制限に達しました。")
+                            logger.critical("返信取得中にAPIクォータ制限に達しました。")
                         tk_notifications.show_error(
                             "返信取得エラー",
                             f"親コメント '{parent_id}' の返信をすべて取得できませんでした。\n"
@@ -217,7 +218,7 @@ def fetch_all_comments(
                     except Exception as e:
                         message = f"親コメント '{parent_id}' の返信取得中に予期せぬエラーが発生しました: {e}"
                         record_error("reply_comments", message)
-                        logger_config.log_message('error', message)
+                        logger.error(message)
                         tk_notifications.show_error(
                             "返信取得エラー",
                             f"親コメント '{parent_id}' の返信取得中にエラーが発生しました。\n{e}"
@@ -255,7 +256,7 @@ def fetch_all_comments(
                 break
 
             if not next_page_token:
-                logger_config.log_message('info', "コメントスレッドと返信コメントの取得を完了しました。")
+                logger.info("コメントスレッドと返信コメントの取得を完了しました。")
                 break
 
             if (
@@ -271,7 +272,7 @@ def fetch_all_comments(
                 )
                 if not confirm_callback(message):
                     user_cancelled = True
-                    logger_config.log_message('info', "ユーザーによってコメント取得が中断されました。")
+                    logger.info("ユーザーによってコメント取得が中断されました。")
                     break
 
             time.sleep(0.1)
@@ -286,7 +287,7 @@ def fetch_all_comments(
                     "reason": api_error_reason,
                     "message": message
                 })
-                logger_config.log_message('warning', f"{message} (API reason: {api_error_reason})")
+                logger.warning(f"{message} (API reason: {api_error_reason})")
             elif api_error_reason == "videoNotFound":
                 message = (
                     "動画を確認できませんでした。投稿されている動画の削除、URLや動画IDの間違い・"
@@ -297,14 +298,14 @@ def fetch_all_comments(
                     "reason": api_error_reason,
                     "message": message
                 })
-                logger_config.log_message('warning', f"{message} (API reason: {api_error_reason})")
+                logger.warning(f"{message} (API reason: {api_error_reason})")
                 tk_notifications.show_warning("動画を確認できません", message)
             else:
                 message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}"
                 record_error("comment_threads", message)
-                logger_config.log_message('error', message)
+                logger.error(message)
                 if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
-                    logger_config.log_message('critical', "APIクォータ制限に達しました。")
+                    logger.critical("APIクォータ制限に達しました。")
                 tk_notifications.show_error(
                     "APIエラー",
                     f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\n{e}"
@@ -313,7 +314,7 @@ def fetch_all_comments(
         except Exception as e:
             message = f"コメントスレッド取得中に予期せぬエラーが発生しました: {e}"
             record_error("comment_threads", message)
-            logger_config.log_message('error', message)
+            logger.error(message)
             tk_notifications.show_error("エラー", f"コメントスレッド取得中にエラーが発生しました。\n{e}")
             break
 
@@ -333,9 +334,7 @@ def fetch_all_comments(
     else:
         result_data["fetch_status"] = "failed"
 
-    logger_config.log_message(
-        'info',
-        f"コメント取得終了: 状態={result_data['fetch_status']}, 取得数={comments_fetched_count}, "
+    logger.info(f"コメント取得終了: 状態={result_data['fetch_status']}, 取得数={comments_fetched_count}, "
         f"取得見込み={total_comments_expected if comment_threads_completed else '未確定'}, "
         f"返信スレッド数={len(result_data['comment_replies_raw_responses'])}"
     )
