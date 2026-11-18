@@ -22,10 +22,10 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Callable, Any
-import sys
-
 # ログ出力のためにlogger_configをインポート
-from module.utility.logger_config import logger_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 def run_task_in_thread(master_root: tk.Tk, task_function: Callable, *args, **kwargs):
     """
@@ -37,7 +37,7 @@ def run_task_in_thread(master_root: tk.Tk, task_function: Callable, *args, **kwa
         *args: task_functionに渡す位置引数。
         **kwargs: task_functionに渡すキーワード引数。
     """
-    logger_config.log_message('info', f"タスク '{task_function.__name__}' を別スレッドで開始します。")
+    logger.info(f"タスク '{task_function.__name__}' を別スレッドで開始します。")
     thread = threading.Thread(target=task_function, args=args, kwargs=kwargs)
     thread.daemon = True # メインスレッド終了時にサブスレッドも終了するように設定
     thread.start()
@@ -146,7 +146,7 @@ class YourApplication:
 
     def _my_long_running_task(self, param1, param2, progress_callback, confirm_callback):
         # ここに時間のかかる処理を記述
-        logger_config.log_message('info', f"長時間タスク開始: {param1}, {param2}")
+        logger.info(f"長時間タスク開始: {param1}, {param2}")
         total_items = 100
         for i in range(total_items):
             # 処理の進捗をGUIに通知
@@ -155,14 +155,14 @@ class YourApplication:
             # 例: APIクォータ制限に近づいた場合にユーザーに確認
             if i == 50:
                 if not confirm_callback("50%完了しました。続行しますか？"):
-                    logger_config.log_message('info', "ユーザーがタスクを中断しました。")
+                    logger.info("ユーザーがタスクを中断しました。")
                     break
             
             # 実際の処理（例: 時間のかかる計算やI/O）
             import time
             time.sleep(0.05)
         
-        logger_config.log_message('info', "長時間タスク完了。")
+        logger.info("長時間タスク完了。")
         # 最終的なGUI更新（完了メッセージなど）
         tk_async_tasks.update_progress_gui(self.master, self.progress_label, self.progress_bar, total_items, total_items, "タスク完了！")
 
