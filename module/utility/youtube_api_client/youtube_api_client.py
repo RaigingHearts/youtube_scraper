@@ -139,15 +139,23 @@ def fetch_all_comments(
             ).execute()
             result_data["comment_threads_raw_responses"].append(response)
 
-            page_info = response.get("pageInfo", {})
-            if "totalResults" in page_info:
-                total_threads_expected = page_info["totalResults"]
+            thread_items = response.get("items", [])
+            # pageInfo.totalResults はページ単位の値として返る場合があるため、
+            # 全ページのitems数を累積して親コメントの取得見込み数を求める。
+            total_threads_expected += len(thread_items)
+            # 現在ページ内の返信見込み数を先に集計し、返信取得途中でも
+            # このページまでの見込み数が欠落しないようにする。
+            total_replies_expected += sum(
+                (thread.get("snippet", {}).get("totalReplyCount", 0) or 0)
+                for thread in thread_items
+            )
+            next_page_token = response.get("nextPageToken")
+            comment_threads_completed = not bool(next_page_token)
 
-            for thread in response.get("items", []):
+            for thread in thread_items:
                 comments_fetched_count += 1  # スレッドの親コメント
                 thread_snippet = thread.get("snippet", {})
                 reply_count = thread_snippet.get("totalReplyCount", 0) or 0
-                total_replies_expected += reply_count
 
                 if reply_count <= 0:
                     continue
@@ -204,7 +212,7 @@ def fetch_all_comments(
                     if progress_callback:
                         progress_callback(
                             comments_fetched_count,
-                            total_threads_expected + total_replies_expected,
+                            (total_threads_expected + total_replies_expected) if comment_threads_completed else None,
                             f"返信コメント取得中... ({comments_fetched_count}件)"
                         )
 
@@ -219,16 +227,14 @@ def fetch_all_comments(
             if progress_callback:
                 progress_callback(
                     comments_fetched_count,
-                    total_threads_expected + total_replies_expected,
+                    (total_threads_expected + total_replies_expected) if comment_threads_completed else None,
                     f"コメント取得中... ({comments_fetched_count}件)"
                 )
 
             if stop_after_current_thread_page:
                 break
 
-            next_page_token = response.get("nextPageToken")
             if not next_page_token:
-                comment_threads_completed = True
                 logger_config.log_message('info', "コメントスレッドと返信コメントの取得を完了しました。")
                 break
 
@@ -268,7 +274,11 @@ def fetch_all_comments(
             tk_notifications.show_error("エラー", f"コメントスレッド取得中にエラーが発生しました。\n{e}")
             break
 
-    total_comments_expected = total_threads_expected + total_replies_expected
+    # 全コメントスレッドのページングが完了した場合に限り、返信見込み数も含む
+    # 合計を確定値として返す。途中中断・ページ取得失敗時は未確定(0)とする。
+    total_comments_expected = (
+        total_threads_expected + total_replies_expected if comment_threads_completed else 0
+    )
     if user_cancelled:
         result_data["fetch_status"] = "cancelled"
     elif result_data["errors"]:
@@ -281,7 +291,7 @@ def fetch_all_comments(
     logger_config.log_message(
         'info',
         f"コメント取得終了: 状態={result_data['fetch_status']}, 取得数={comments_fetched_count}, "
-        f"取得見込み={total_comments_expected}, "
+        f"取得見込み={total_comments_expected if comment_threads_completed else '未確定'}, "
         f"返信スレッド数={len(result_data['comment_replies_raw_responses'])}"
     )
     return result_data, comments_fetched_count, total_comments_expected

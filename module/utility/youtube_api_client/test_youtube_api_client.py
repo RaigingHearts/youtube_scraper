@@ -154,7 +154,7 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
 
         self.assertEqual(data["fetch_status"], "cancelled")
         self.assertEqual(fetched_count, 100)
-        self.assertEqual(expected_count, 101)
+        self.assertEqual(expected_count, 0)  # 未取得ページが残るため総数は未確定
 
     @patch.object(youtube_api_client, "get_youtube_service")
     @patch.object(youtube_api_client.tk_notifications, "show_error")
@@ -184,6 +184,87 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(data["fetch_status"], "partial")
         self.assertEqual(data["errors"][0]["stage"], "reply_comments")
         _show_error.assert_called_once()
+
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_mult_page_thread_estimate_is_cumulative_and_duplicates_are_counted_as_records(
+        self, _show_error, get_service
+    ):
+        first_page = {
+            "pageInfo": {"totalResults": 2},
+            "items": [
+                {"id": "parent-1", "snippet": {
+                    "totalReplyCount": 1, "topLevelComment": {"id": "parent-1"}
+                }},
+                {"id": "parent-2", "snippet": {
+                    "totalReplyCount": 0, "topLevelComment": {"id": "parent-2"}
+                }}
+            ],
+            "nextPageToken": "page-2"
+        }
+        second_page = {
+            # APIのpageInfo値は合計値として使わず、items件数を累積する
+            "pageInfo": {"totalResults": 1},
+            "items": [
+                {"id": "parent-1", "snippet": {
+                    "totalReplyCount": 1, "topLevelComment": {"id": "parent-1"}
+                }}
+            ]
+        }
+        service = make_service(first_page, [
+            {"items": [{"id": "reply-1"}]},
+            {"items": [{"id": "reply-1"}]}
+        ])
+        service.commentThreads.return_value.list.return_value.execute.side_effect = [
+            first_page, second_page
+        ]
+        get_service.return_value = service
+        progress_updates = []
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key", "video",
+            progress_callback=lambda current, total, message: progress_updates.append((current, total))
+        )
+
+        # 3親レコード + 2返信レコード。重複親・返信もRaw取得レコードとして数える。
+        self.assertEqual(fetched_count, 5)
+        self.assertEqual(expected_count, 5)
+        self.assertEqual(data["fetch_status"], "complete")
+        self.assertEqual(len(data["comment_threads_raw_responses"]), 2)
+        self.assertEqual(service.comments.return_value.list.call_count, 2)
+        self.assertTrue(any(total is None for _, total in progress_updates))
+        self.assertEqual(progress_updates[-1][1], 5)
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_progress_total_remains_unknown_when_user_cancels_before_last_page(
+        self, _show_error, get_service
+    ):
+        first_page = {
+            "pageInfo": {"totalResults": 100},
+            "items": [{
+                "id": f"parent-{index}",
+                "snippet": {"totalReplyCount": 0, "topLevelComment": {"id": f"parent-{index}"}}
+            } for index in range(100)],
+            "nextPageToken": "page-2"
+        }
+        service = make_service(first_page, [])
+        get_service.return_value = service
+        progress_updates = []
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key", "video",
+            progress_callback=lambda current, total, message: progress_updates.append((current, total)),
+            confirm_callback=lambda _message: False
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(fetched_count, 100)
+        self.assertEqual(expected_count, 0)
+        self.assertTrue(progress_updates)
+        self.assertIsNone(progress_updates[-1][1])
+
 
 
 if __name__ == "__main__":

@@ -69,10 +69,10 @@ def _perform_gui_update(progress_label: ttk.Label, progress_bar: ttk.Progressbar
         progress_label.config(text=message)
     
     if max_value is not None and max_value > 0:
+        progress_bar.stop()
         progress_bar.config(mode="determinate", maximum=max_value, value=current_value)
-        if current_value >= max_value:
-            progress_bar.stop() # 完了時に停止
-            progress_label.config(text=f"処理完了 ({current_value}/{max_value})")
+        # 分子が分母に到達しても、取得処理全体の終了を意味しない。
+        # 実際の完了表示は呼び出し元のタスク終了処理に任せる。
     else:
         # 最大値が不明な場合、indeterminateモードに
         if progress_bar["mode"] != "indeterminate":
