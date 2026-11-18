@@ -13,6 +13,10 @@ def configure_logging(log_file=LOG_FILE, level=logging.INFO):
     複数回呼び出された場合も、このモジュールが管理する FileHandler は
     1つだけ維持し、出力先とログレベルを最新の指定に合わせる。
     """
+    # Google APIクライアントはDEBUG時にAPIキーやページトークンを含むURLを記録するため、
+    # アプリ全体がDEBUGでも当該ライブラリのDEBUGログは出力しない。
+    logging.getLogger("googleapiclient.discovery").setLevel(logging.INFO)
+
     root_logger = logging.getLogger()
     managed_handlers = [
         handler for handler in root_logger.handlers
