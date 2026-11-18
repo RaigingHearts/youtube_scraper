@@ -338,5 +338,56 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         show_error.assert_not_called()
 
 
+class SensitiveErrorLoggingTests(unittest.TestCase):
+    def test_safe_exception_summary_omits_request_uri_and_secrets(self):
+        error = HttpError(
+            resp=MagicMock(status=403),
+            content=b'{"error":{"errors":[{"reason":"forbidden"}]}}',
+            uri=(
+                "https://youtube.googleapis.com/youtube/v3/commentThreads"
+                "?key=secret-api-key&pageToken=secret-page-token"
+            )
+        )
+
+        summary = youtube_api_client._safe_exception_summary(error)
+
+        self.assertIn("HttpError", summary)
+        self.assertIn("HTTP status 403", summary)
+        self.assertIn("API reason forbidden", summary)
+        self.assertNotIn("secret-api-key", summary)
+        self.assertNotIn("secret-page-token", summary)
+        self.assertNotIn("youtube.googleapis.com", summary)
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_http_error_details_are_sanitized_in_result_log_and_notification(
+        self, show_error, get_service
+    ):
+        service = make_service({"items": []}, [])
+        service.commentThreads.return_value.list.return_value.execute.side_effect = HttpError(
+            resp=MagicMock(status=403),
+            content=b'{"error":{"errors":[{"reason":"forbidden"}]}}',
+            uri=(
+                "https://youtube.googleapis.com/youtube/v3/commentThreads"
+                "?key=secret-api-key&pageToken=secret-page-token"
+            )
+        )
+        get_service.return_value = service
+
+        with self.assertLogs(youtube_api_client.logger, level="ERROR") as captured:
+            data, _, _ = youtube_api_client.fetch_all_comments("key", "video")
+
+        exposed_outputs = (
+            str(data["errors"])
+            + "\n".join(captured.output)
+            + str(show_error.call_args)
+        )
+        self.assertIn("HTTP status 403", exposed_outputs)
+        self.assertIn("API reason forbidden", exposed_outputs)
+        self.assertNotIn("secret-api-key", exposed_outputs)
+        self.assertNotIn("secret-page-token", exposed_outputs)
+        self.assertNotIn("youtube.googleapis.com", exposed_outputs)
+
+
 if __name__ == "__main__":
     unittest.main()
