@@ -190,7 +190,7 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
 
     @patch.object(youtube_api_client, "get_youtube_service")
     @patch.object(youtube_api_client.tk_notifications, "show_error")
-    def test_mult_page_thread_estimate_is_cumulative_and_duplicates_are_counted_as_records(
+    def test_duplicate_parent_thread_is_preserved_raw_but_reply_fetch_is_deduplicated(
         self, _show_error, get_service
     ):
         first_page = {
@@ -206,7 +206,6 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
             "nextPageToken": "page-2"
         }
         second_page = {
-            # APIのpageInfo値は合計値として使わず、items件数を累積する
             "pageInfo": {"totalResults": 1},
             "items": [
                 {"id": "parent-1", "snippet": {
@@ -214,10 +213,8 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
                 }}
             ]
         }
-        service = make_service(first_page, [
-            {"items": [{"id": "reply-1"}]},
-            {"items": [{"id": "reply-1"}]}
-        ])
+        reply_page = {"items": [{"id": "reply-1"}]}
+        service = make_service(first_page, [reply_page])
         service.commentThreads.return_value.list.return_value.execute.side_effect = [
             first_page, second_page
         ]
@@ -229,14 +226,18 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
             progress_callback=lambda current, total, message: progress_updates.append((current, total))
         )
 
-        # 3親レコード + 2返信レコード。重複親・返信もRaw取得レコードとして数える。
-        self.assertEqual(fetched_count, 5)
-        self.assertEqual(expected_count, 5)
+        # ユニーク親2件 + ユニーク返信1件。Raw親スレッドは両ページ分を保持する。
+        self.assertEqual(fetched_count, 3)
+        self.assertEqual(expected_count, 3)
         self.assertEqual(data["fetch_status"], "complete")
         self.assertEqual(len(data["comment_threads_raw_responses"]), 2)
-        self.assertEqual(service.comments.return_value.list.call_count, 2)
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{"parent_id": "parent-1", "raw_responses": [reply_page]}]
+        )
+        self.assertEqual(service.comments.return_value.list.call_count, 1)
         self.assertTrue(any(total is None for _, total in progress_updates))
-        self.assertEqual(progress_updates[-1][1], 5)
+        self.assertEqual(progress_updates[-1][1], 3)
 
     @patch.object(youtube_api_client, "get_youtube_service")
     @patch.object(youtube_api_client.tk_notifications, "show_error")
