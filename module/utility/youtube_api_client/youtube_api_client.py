@@ -114,6 +114,10 @@ def fetch_all_comments(
             result_data["channel_info_raw_response"] = service.channels().list(
                 part="snippet", id=channel_id
             ).execute()
+            if not result_data["channel_info_raw_response"].get("items"):
+                message = f"チャンネルID '{channel_id}' の情報が見つかりませんでした。"
+                record_error("channel_info", message)
+                logger_config.log_message('warning', message)
         except HttpError as e:
             message = f"チャンネル情報の取得中にAPIエラーが発生しました: {e}"
             record_error("channel_info", message)
