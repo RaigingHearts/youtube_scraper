@@ -287,7 +287,7 @@ class YouTubeCommentScraperApp:
                     tk_notifications.show_warning(
                         "コメント取得不可",
                         "この動画ではコメントがオフに設定されているため、コメントを取得できませんでした。\n"
-                        (
+                        + (
                             "取得済みのコメントデータは保存されています。\n"
                             if comments_saved else "コメントデータは保存されていません。\n"
                         ) + saved_summary,
