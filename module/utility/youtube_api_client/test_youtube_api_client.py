@@ -241,6 +241,43 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
 
     @patch.object(youtube_api_client, "get_youtube_service")
     @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_duplicate_reply_ids_are_counted_once_and_raw_pages_are_preserved(
+        self, _show_error, get_service
+    ):
+        thread_response = {
+            "items": [{
+                "id": "parent-1",
+                "snippet": {
+                    "totalReplyCount": 2,
+                    "topLevelComment": {"id": "parent-1"}
+                }
+            }]
+        }
+        first_reply_page = {
+            "items": [{"id": "reply-1"}],
+            "nextPageToken": "reply-page-2"
+        }
+        second_reply_page = {
+            "items": [{"id": "reply-1"}, {"id": "reply-2"}]
+        }
+        service = make_service(thread_response, [first_reply_page, second_reply_page])
+        get_service.return_value = service
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments("key", "video")
+
+        self.assertEqual(fetched_count, 3)
+        self.assertEqual(expected_count, 3)
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{
+                "parent_id": "parent-1",
+                "raw_responses": [first_reply_page, second_reply_page]
+            }]
+        )
+        self.assertEqual(service.comments.return_value.list.call_count, 2)
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
     def test_progress_total_remains_unknown_when_user_cancels_before_last_page(
         self, _show_error, get_service
     ):
