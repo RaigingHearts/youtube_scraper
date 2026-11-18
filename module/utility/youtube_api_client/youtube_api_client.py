@@ -94,7 +94,9 @@ def fetch_all_comments(
                 f"投稿者='{video_snippet.get('channelTitle', '投稿者不明')}'"
             )
         else:
-            logger_config.log_message('warning', f"動画ID '{video_id}' の情報が見つかりませんでした。")
+            message = f"動画ID '{video_id}' の情報が見つかりませんでした。"
+            record_error("video_info", message)
+            logger_config.log_message('warning', message)
     except HttpError as e:
         message = f"動画情報の取得中にAPIエラーが発生しました: {e}"
         record_error("video_info", message)
