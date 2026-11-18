@@ -20,7 +20,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 # settings_managerモジュールをインポート
 from module.manager.secure_settings import settings_manager
-# logger_configモジュールをインポート
+# 標準 logging を利用
 import logging
 
 logger = logging.getLogger(__name__)
