@@ -176,13 +176,13 @@ class YouTubeCommentScraperApp:
         assert self.api_key is not None, "APIキーがNoneです。これは初期化で防がれるべきです。"
 
         # youtube_api_clientのコールバック関数を定義
-        def progress_callback(current_comments: int, total_comments: int, message: str):
+        def progress_callback(current_comments: int, total_comments: int | None, message: str):
             tk_async_tasks.update_progress_gui(
                 self.master, self.progress_label, self.progress_bar, 
                 current_comments, total_comments, message
             )
             self.master.after(0, lambda: self.comment_count_label.config(
-                text=f"取得コメント数: {current_comments} / {total_comments}"
+                text=(f"取得コメント数: {current_comments} / {total_comments}"\n                      if total_comments is not None else f"取得コメント数: {current_comments} / 確定待ち")
             ))
 
         def confirm_callback(message: str) -> bool:
