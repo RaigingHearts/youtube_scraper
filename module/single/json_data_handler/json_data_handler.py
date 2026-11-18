@@ -14,28 +14,13 @@ JSONデータの整形とJSONファイルへの保存を行うモジュールス
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 # import tkinter as tk # 不要なインポートを削除
 # from tkinter import messagebox # 不要なインポートを削除
 
-# ログ出力のためにlogger_configをインポート（循環参照に注意が必要なため、関数内でインポート）
-# from logger_config import log_message
-
-def _get_logger_config_log_message():
-    """
-    logger_configモジュールのlog_message関数を動的に取得する。
-    """
-    try:
-        if 'logger_config' in sys.modules:
-            from module.utility.logger_config.logger_config import log_message
-            return log_message
-        else:
-            print("Warning: logger_config not yet loaded when json_data_handler tried to log.", file=sys.stderr)
-            return lambda level, message: print(f"[{level.upper()}] {message}", file=sys.stderr)
-    except ImportError:
-        return lambda level, message: print(f"[{level.upper()}] {message}", file=sys.stderr)
-
+logger = logging.getLogger(__name__)
 
 def save_json_to_file(data: dict | list, filename: str, output_dir: str = None) -> bool: # type:ignore
     """
@@ -51,17 +36,16 @@ def save_json_to_file(data: dict | list, filename: str, output_dir: str = None) 
     Returns:
         bool: ファイルの保存が成功した場合はTrue、失敗した場合はFalse。
     """
-    log_message = _get_logger_config_log_message()
 
     if output_dir:
         # 指定された出力ディレクトリが存在しない場合、作成を試みる
         if not os.path.exists(output_dir):
             try:
                 os.makedirs(output_dir)
-                log_message('info', f"出力ディレクトリ '{output_dir}' を作成しました。")
+                logger.info(f"出力ディレクトリ '{output_dir}' を作成しました。")
             except OSError as e:
                 # messagebox.showerror("ディレクトリ作成エラー", f"ディレクトリ '{output_dir}' の作成中にエラーが発生しました:\n{e}") # Tkinter依存の処理を削除
-                log_message('error', f"ディレクトリ '{output_dir}' の作成中にエラーが発生しました: {e}")
+                logger.error(f"ディレクトリ '{output_dir}' の作成中にエラーが発生しました: {e}")
                 return False
         file_path = os.path.join(output_dir, filename)
     else:
@@ -72,9 +56,9 @@ def save_json_to_file(data: dict | list, filename: str, output_dir: str = None) 
     try:
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
-        log_message('info', f"JSONデータが '{file_path}' に保存されました。")
+        logger.info(f"JSONデータが '{file_path}' に保存されました。")
         return True
     except IOError as e:
         # messagebox.showerror("ファイルの保存エラー", f"ファイル '{filename}' の保存中にエラーが発生しました:\n{e}") # Tkinter依存の処理を削除
-        log_message('error', f"ファイル '{filename}' の保存中にエラーが発生しました: {e}")
+        logger.error(f"ファイル '{filename}' の保存中にエラーが発生しました: {e}")
         return False
