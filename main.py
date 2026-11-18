@@ -283,7 +283,17 @@ class YouTubeCommentScraperApp:
             if message_parts:
                 saved_summary = "、\n".join(message_parts) + f"を '{output_folder_name}' フォルダに保存しました。"
                 error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
-                if fetch_status == "complete":
+                if fetch_status == "comments_disabled":
+                    tk_notifications.show_warning(
+                        "コメント取得不可",
+                        "この動画ではコメントがオフに設定されているため、コメントを取得できませんでした。\n"
+                        + (
+                            "取得済みのコメントデータは保存されています。\n"
+                            if comments_saved else "コメントデータは保存されていません。\n"
+                        ) + saved_summary,
+                        parent=self.master
+                    )
+                elif fetch_status == "complete":
                     tk_notifications.show_info("取得完了", "コメントの取得が正常に完了しました。\n" + saved_summary, parent=self.master)
                 elif fetch_status == "cancelled":
                     cancellation_message = "ユーザー操作により取得を中断しました。取得済みデータを保存しました。\n" + saved_summary
@@ -297,7 +307,14 @@ class YouTubeCommentScraperApp:
                 self.master.after(0, lambda: self.open_json_button.config(state=tk.NORMAL))
             else:
                 error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
-                if fetch_status == "cancelled":
+                if fetch_status == "comments_disabled":
+                    tk_notifications.show_warning(
+                        "コメント取得不可",
+                        "この動画ではコメントがオフに設定されているため、コメントを取得できませんでした。"
+                        + ("\n\n" + error_summary if error_summary else ""),
+                        parent=self.master
+                    )
+                elif fetch_status == "cancelled":
                     cancellation_message = "取得を中断しました。保存できるデータはありませんでした。"
                     if error_summary:
                         cancellation_message += "\n\n取得中に発生したエラー:\n" + error_summary
