@@ -227,9 +227,18 @@ def fetch_all_comments(
                 reply_record = {"parent_id": parent_id, "raw_responses": []}
                 result_data["comment_replies_raw_responses"].append(reply_record)
                 reply_page_token = None
+                reply_page_number = 0
 
                 while True:
                     try:
+                        reply_page_number += 1
+                        request_reply_page_token = reply_page_token
+                        logger.debug(
+                            "返信ページ取得開始: parent_id=%s, page=%d, request_token=%s",
+                            parent_id,
+                            reply_page_number,
+                            _token_fingerprint(request_reply_page_token)
+                        )
                         reply_response = service.comments().list(
                             part="snippet",
                             parentId=parent_id,
@@ -264,6 +273,14 @@ def fetch_all_comments(
                     # APIレスポンスを加工せず、ページ単位でそのまま保存する
                     reply_record["raw_responses"].append(reply_response)
                     reply_items = reply_response.get("items", [])
+                    next_reply_page_token = reply_response.get("nextPageToken")
+                    logger.debug(
+                        "返信ページ取得完了: parent_id=%s, page=%d, records=%d, next_token=%s",
+                        parent_id,
+                        reply_page_number,
+                        len(reply_items),
+                        _token_fingerprint(next_reply_page_token)
+                    )
                     raw_reply_records_count += len(reply_items)
                     fetched_on_page = 0
                     for reply_item in reply_items:
@@ -287,7 +304,7 @@ def fetch_all_comments(
                             f"返信コメント取得中... ({comments_fetched_count}件)"
                         )
 
-                    reply_page_token = reply_response.get("nextPageToken")
+                    reply_page_token = next_reply_page_token
                     if not reply_page_token:
                         break
                     time.sleep(0.1)
