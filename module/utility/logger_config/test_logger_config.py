@@ -15,11 +15,14 @@ class LoggerConfigTests(unittest.TestCase):
         os.chdir(self.temp_dir.name)
         self.root_logger = logging.getLogger()
         self.original_level = self.root_logger.level
+        self.discovery_logger = logging.getLogger("googleapiclient.discovery")
+        self.original_discovery_level = self.discovery_logger.level
         self._remove_managed_handlers()
 
     def tearDown(self):
         self._remove_managed_handlers()
         self.root_logger.setLevel(self.original_level)
+        self.discovery_logger.setLevel(self.original_discovery_level)
         os.chdir(self.original_cwd)
         self.temp_dir.cleanup()
 
@@ -90,6 +93,27 @@ class LoggerConfigTests(unittest.TestCase):
         with open(log_path, "r", encoding="utf-8") as log_file:
             contents = log_file.read()
         self.assertIn("DEBUG - debug after reconfiguration", contents)
+
+    def test_debug_mode_suppresses_google_api_url_but_keeps_application_debug(self):
+        log_path = os.path.join(self.temp_dir.name, "debug.log")
+        handler = logger_config.configure_logging(log_path, logging.DEBUG)
+
+        self.assertEqual(self.root_logger.level, logging.DEBUG)
+        self.assertEqual(self.discovery_logger.level, logging.INFO)
+
+        self.discovery_logger.debug(
+            "URL being requested: GET https://example.invalid/?key=secret-key"
+            "&pageToken=secret-token"
+        )
+        logging.getLogger("module.application").debug("safe application diagnostic")
+        handler.flush()
+
+        with open(log_path, "r", encoding="utf-8") as log_file:
+            contents = log_file.read()
+        self.assertNotIn("URL being requested", contents)
+        self.assertNotIn("secret-key", contents)
+        self.assertNotIn("secret-token", contents)
+        self.assertIn("DEBUG - safe application diagnostic", contents)
 
     def test_reconfiguration_with_invalid_path_preserves_existing_handler(self):
         valid_path = os.path.join(self.temp_dir.name, "valid.log")
