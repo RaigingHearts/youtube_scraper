@@ -365,7 +365,6 @@ class YouTubeCommentScraperApp:
 def main() -> None:
     """アプリケーションを初期化してGUIを起動する。"""
     logger_config.configure_logging()
-    # ogger_config.configure_logging(level=logging.DEBUG)
     settings_manager.initialize_settings()
     root = tk.Tk()
     YouTubeCommentScraperApp(root)
