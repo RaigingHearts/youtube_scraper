@@ -1,5 +1,6 @@
 """Tests for complete comment-reply pagination."""
 
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -353,7 +354,7 @@ class SensitiveErrorLoggingTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 error = HttpError(
                     resp=MagicMock(status=403),
-                    content=__import__("json").dumps(payload).encode("utf-8")
+                    content=json.dumps(payload).encode("utf-8")
                 )
                 self.assertIsNone(youtube_api_client._get_api_error_reason(error))
 
