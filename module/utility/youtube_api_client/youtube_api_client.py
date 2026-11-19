@@ -143,6 +143,7 @@ def fetch_all_comments(
     stop_after_current_thread_page = False
     user_cancelled = False
     comment_threads_completed = False
+    expected_total_confirmed = False
     comments_disabled = False
 
     def record_error(stage: str, message: str) -> None:
@@ -223,6 +224,7 @@ def fetch_all_comments(
             )
             comment_threads_completed = not bool(next_page_token)
 
+            thread_items_accounted = 0
             for thread_index, thread in enumerate(thread_items, start=1):
                 thread_snippet = thread.get("snippet", {})
                 reply_count = thread_snippet.get("totalReplyCount", 0) or 0
@@ -237,6 +239,9 @@ def fetch_all_comments(
                         thread_page_number,
                         thread_index
                     )
+                    thread_items_accounted += 1
+                    if comment_threads_completed and thread_items_accounted == len(thread_items):
+                        expected_total_confirmed = True
                     continue
 
                 if parent_id:
@@ -244,6 +249,9 @@ def fetch_all_comments(
                 comments_fetched_count += 1
                 total_threads_expected += 1
                 total_replies_expected += reply_count
+                thread_items_accounted += 1
+                if comment_threads_completed and thread_items_accounted == len(thread_items):
+                    expected_total_confirmed = True
 
                 if reply_count <= 0:
                     continue
@@ -335,7 +343,7 @@ def fetch_all_comments(
                             comments_fetched_count,
                             (total_threads_expected +
                              total_replies_expected)
-                            if comment_threads_completed and thread_index == len(thread_items)
+                            if expected_total_confirmed
                             else None,
                             f"返信コメント取得中... ({comments_fetched_count}件)"
                         )
@@ -348,12 +356,15 @@ def fetch_all_comments(
                 if stop_after_current_thread_page:
                     break
 
+            if comment_threads_completed and thread_items_accounted == len(thread_items):
+                expected_total_confirmed = True
+
             if progress_callback:
                 progress_callback(
                     comments_fetched_count,
                     (total_threads_expected +
                      total_replies_expected)
-                    if comment_threads_completed and not stop_after_current_thread_page
+                    if expected_total_confirmed
                     else None,
                     f"コメント取得中... ({comments_fetched_count}件)"
                 )
@@ -430,7 +441,7 @@ def fetch_all_comments(
     # 全コメントスレッドのページングが完了した場合に限り、返信見込み数も含む
     # 合計を確定値として返す。途中中断・ページ取得失敗時は未確定(0)とする。
     total_comments_expected = (
-        total_threads_expected + total_replies_expected if comment_threads_completed else 0
+        total_threads_expected + total_replies_expected if expected_total_confirmed else 0
     )
     if comments_disabled:
         result_data["fetch_status"] = "comments_disabled"
@@ -449,7 +460,7 @@ def fetch_all_comments(
         "親コメント重複=%d, 返信コメント重複=%d, 返信取得スレッド数=%d",
         result_data["fetch_status"],
         comments_fetched_count,
-        total_comments_expected if comment_threads_completed else "未確定",
+        total_comments_expected if expected_total_confirmed else "未確定",
         raw_thread_records_count,
         raw_reply_records_count,
         duplicate_parent_count,
