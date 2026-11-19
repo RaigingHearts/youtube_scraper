@@ -463,7 +463,7 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(fetched_count, 1)
         self.assertEqual(expected_count, 0)
         self.assertEqual(progress_updates[-1], (1, None))
-        self.assertIn("ユニーク取得見込み=未確定", "\\n".join(captured.output))
+        self.assertIn("ユニーク取得見込み=未確定", "\n".join(captured.output))
         _show_error.assert_called_once()
 
     @patch.object(youtube_api_client, "get_youtube_service")
@@ -506,7 +506,7 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(fetched_count, 2)
         self.assertEqual(expected_count, 3)
         self.assertEqual(progress_updates[-1], (2, 3))
-        self.assertIn("ユニーク取得見込み=3", "\\n".join(captured.output))
+        self.assertIn("ユニーク取得見込み=3", "\n".join(captured.output))
         _show_error.assert_called_once()
 
 
