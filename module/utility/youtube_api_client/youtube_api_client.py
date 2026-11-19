@@ -55,10 +55,22 @@ def _get_api_error_reason(error: HttpError) -> Optional[str]:
     except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
         return None
 
-    error_details = payload.get("error", {}).get("errors", [])
+    if not isinstance(payload, dict):
+        return None
+
+    error_payload = payload.get("error")
+    if not isinstance(error_payload, dict):
+        return None
+
+    error_details = error_payload.get("errors")
+    if not isinstance(error_details, list):
+        return None
+
     for detail in error_details:
+        if not isinstance(detail, dict):
+            continue
         reason = detail.get("reason")
-        if reason:
+        if isinstance(reason, str) and reason:
             return reason
     return None
 
