@@ -339,6 +339,38 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
 
 
 class SensitiveErrorLoggingTests(unittest.TestCase):
+    def test_api_error_reason_parser_handles_unexpected_json_shapes(self):
+        malformed_payloads = [
+            [],
+            {"error": None},
+            {"error": []},
+            {"error": {"errors": None}},
+            {"error": {"errors": {}}},
+            {"error": {"errors": [None, "not-an-object", {"reason": 403}]}},
+        ]
+
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload):
+                error = HttpError(
+                    resp=MagicMock(status=403),
+                    content=__import__("json").dumps(payload).encode("utf-8")
+                )
+                self.assertIsNone(youtube_api_client._get_api_error_reason(error))
+
+    def test_api_error_reason_parser_skips_invalid_entries_and_returns_string_reason(self):
+        error = HttpError(
+            resp=MagicMock(status=403),
+            content=(
+                b'{"error":{"errors":[null,"invalid",'
+                b'{"reason":403},{"reason":"quotaExceeded"}]}}'
+            )
+        )
+
+        self.assertEqual(
+            youtube_api_client._get_api_error_reason(error),
+            "quotaExceeded"
+        )
+
     def test_safe_exception_summary_omits_request_uri_and_secrets(self):
         error = HttpError(
             resp=MagicMock(status=403),
