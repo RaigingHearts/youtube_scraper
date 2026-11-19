@@ -423,6 +423,93 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(progress_updates[-1], (3, 3))
 
 
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_expected_total_remains_unknown_when_reply_error_skips_later_threads(
+        self, _show_error, get_service
+    ):
+        thread_response = {
+            "items": [
+                {
+                    "id": "parent-1",
+                    "snippet": {
+                        "totalReplyCount": 1,
+                        "topLevelComment": {"id": "parent-1"}
+                    }
+                },
+                {
+                    "id": "parent-2",
+                    "snippet": {
+                        "totalReplyCount": 0,
+                        "topLevelComment": {"id": "parent-2"}
+                    }
+                }
+            ]
+        }
+        service = make_service(thread_response, [RuntimeError("simulated reply failure")])
+        get_service.return_value = service
+        progress_updates = []
+
+        with self.assertLogs(youtube_api_client.logger, level="INFO") as captured:
+            data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+                "key",
+                "video",
+                progress_callback=lambda current, total, message: (
+                    progress_updates.append((current, total))
+                )
+            )
+
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(fetched_count, 1)
+        self.assertEqual(expected_count, 0)
+        self.assertEqual(progress_updates[-1], (1, None))
+        self.assertIn("ユニーク取得見込み=未確定", "\\n".join(captured.output))
+        _show_error.assert_called_once()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_expected_total_is_confirmed_when_reply_error_occurs_on_last_thread(
+        self, _show_error, get_service
+    ):
+        thread_response = {
+            "items": [
+                {
+                    "id": "parent-1",
+                    "snippet": {
+                        "totalReplyCount": 0,
+                        "topLevelComment": {"id": "parent-1"}
+                    }
+                },
+                {
+                    "id": "parent-2",
+                    "snippet": {
+                        "totalReplyCount": 1,
+                        "topLevelComment": {"id": "parent-2"}
+                    }
+                }
+            ]
+        }
+        service = make_service(thread_response, [RuntimeError("simulated reply failure")])
+        get_service.return_value = service
+        progress_updates = []
+
+        with self.assertLogs(youtube_api_client.logger, level="INFO") as captured:
+            data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+                "key",
+                "video",
+                progress_callback=lambda current, total, message: (
+                    progress_updates.append((current, total))
+                )
+            )
+
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(fetched_count, 2)
+        self.assertEqual(expected_count, 3)
+        self.assertEqual(progress_updates[-1], (2, 3))
+        self.assertIn("ユニーク取得見込み=3", "\\n".join(captured.output))
+        _show_error.assert_called_once()
+
+
 class SensitiveErrorLoggingTests(unittest.TestCase):
     def test_api_error_reason_parser_handles_unexpected_json_shapes(self):
         malformed_payloads = [
