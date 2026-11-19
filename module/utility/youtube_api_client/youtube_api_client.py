@@ -25,14 +25,18 @@ COMMENT_FETCH_THRESHOLD = 100
 def get_youtube_service(api_key: str) -> Any:
     """YouTube Data APIサービスオブジェクトを構築して返す。"""
     try:
-        service = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=api_key)
+        service = build(YOUTUBE_API_SERVICE_NAME,
+                        YOUTUBE_API_VERSION, developerKey=api_key)
         logger.info("YouTube APIサービスオブジェクトを構築しました。")
         return service
     except Exception as e:
-        logger.error(f"YouTube APIサービス構築エラー: {e}")
+        error_summary = _safe_exception_summary(e)
+        logger.error("YouTube APIサービス構築エラー: %s", error_summary)
         tk_notifications.show_error(
             "APIエラー",
-            f"YouTube APIサービスを構築できませんでした。\nAPIキーが正しいか確認してください。\nエラー: {e}"
+            "YouTube APIサービスを構築できませんでした。\n"
+            "APIキーが正しいか確認してください。\n"
+            f"エラー概要: {error_summary}"
         )
         return None
 
@@ -53,10 +57,22 @@ def _get_api_error_reason(error: HttpError) -> Optional[str]:
     except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
         return None
 
-    error_details = payload.get("error", {}).get("errors", [])
+    if not isinstance(payload, dict):
+        return None
+
+    error_payload = payload.get("error")
+    if not isinstance(error_payload, dict):
+        return None
+
+    error_details = error_payload.get("errors")
+    if not isinstance(error_details, list):
+        return None
+
     for detail in error_details:
+        if not isinstance(detail, dict):
+            continue
         reason = detail.get("reason")
-        if reason:
+        if isinstance(reason, str) and reason:
             return reason
     return None
 
@@ -68,10 +84,24 @@ def _token_fingerprint(token: Optional[str]) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
+def _safe_exception_summary(error: Exception) -> str:
+    """例外文字列に含まれ得るURL・APIキー・ページトークンを出さず概要を返す。"""
+    details = [type(error).__name__]
+    if isinstance(error, HttpError):
+        status = getattr(getattr(error, "resp", None), "status", None)
+        reason = _get_api_error_reason(error)
+        if status is not None:
+            details.append(f"HTTP status {status}")
+        if reason:
+            details.append(f"API reason {reason}")
+    return " / ".join(details)
+
+
 def fetch_all_comments(
     api_key: str,
     video_id: str,
-    progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None,
+    progress_callback: Optional[Callable[[
+        int, Optional[int], Optional[str]], None]] = None,
     confirm_callback: Optional[Callable[[str], bool]] = None
 ) -> tuple[dict, int, int]:
     """
@@ -127,19 +157,19 @@ def fetch_all_comments(
             video_snippet = video_response["items"][0].get("snippet", {})
             channel_id = video_snippet.get("channelId")
             logger.info(f"動画情報取得: タイトル='{video_snippet.get('title', 'タイトル不明')}', "
-                f"投稿者='{video_snippet.get('channelTitle', '投稿者不明')}'"
-            )
+                        f"投稿者='{video_snippet.get('channelTitle', '投稿者不明')}'"
+                        )
         else:
             message = f"動画ID '{video_id}' の情報が見つかりませんでした。"
             record_error("video_info", message)
             logger.warning(message)
     except HttpError as e:
-        message = f"動画情報の取得中にAPIエラーが発生しました: {e}"
+        message = f"動画情報の取得中にAPIエラーが発生しました: {_safe_exception_summary(e)}"
         record_error("video_info", message)
         _report_api_error("APIエラー", message)
         return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
     except Exception as e:
-        message = f"動画情報取得中に予期せぬエラーが発生しました: {e}"
+        message = f"動画情報取得中に予期せぬエラーが発生しました: {_safe_exception_summary(e)}"
         record_error("video_info", message)
         _report_api_error("エラー", message)
         return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
@@ -155,11 +185,11 @@ def fetch_all_comments(
                 record_error("channel_info", message)
                 logger.warning(message)
         except HttpError as e:
-            message = f"チャンネル情報の取得中にAPIエラーが発生しました: {e}"
+            message = f"チャンネル情報の取得中にAPIエラーが発生しました: {_safe_exception_summary(e)}"
             record_error("channel_info", message)
             _report_api_error("APIエラー", message)
         except Exception as e:
-            message = f"チャンネル情報取得中に予期せぬエラーが発生しました: {e}"
+            message = f"チャンネル情報取得中に予期せぬエラーが発生しました: {_safe_exception_summary(e)}"
             record_error("channel_info", message)
             _report_api_error("エラー", message)
 
@@ -225,7 +255,8 @@ def fetch_all_comments(
                     continue
 
                 reply_record = {"parent_id": parent_id, "raw_responses": []}
-                result_data["comment_replies_raw_responses"].append(reply_record)
+                result_data["comment_replies_raw_responses"].append(
+                    reply_record)
                 reply_page_token = None
                 reply_page_number = 0
 
@@ -247,25 +278,27 @@ def fetch_all_comments(
                             textFormat="plainText"
                         ).execute()
                     except HttpError as e:
-                        message = f"親コメント '{parent_id}' の返信ページ取得中にAPIエラーが発生しました: {e}"
+                        error_summary = _safe_exception_summary(e)
+                        message = f"親コメント '{parent_id}' の返信ページ取得中にAPIエラーが発生しました: {error_summary}"
                         record_error("reply_comments", message)
                         logger.error(message)
-                        if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
+                        if _get_api_error_reason(e) == "quotaExceeded":
                             logger.critical("返信取得中にAPIクォータ制限に達しました。")
                         tk_notifications.show_error(
                             "返信取得エラー",
                             f"親コメント '{parent_id}' の返信をすべて取得できませんでした。\n"
-                            f"取得済みの返信データは保存対象に残します。\n{e}"
+                            f"取得済みの返信データは保存対象に残します。\nエラー概要: {error_summary}"
                         )
                         stop_after_current_thread_page = True
                         break
                     except Exception as e:
-                        message = f"親コメント '{parent_id}' の返信取得中に予期せぬエラーが発生しました: {e}"
+                        error_summary = _safe_exception_summary(e)
+                        message = f"親コメント '{parent_id}' の返信取得中に予期せぬエラーが発生しました: {error_summary}"
                         record_error("reply_comments", message)
                         logger.error(message)
                         tk_notifications.show_error(
                             "返信取得エラー",
-                            f"親コメント '{parent_id}' の返信取得中にエラーが発生しました。\n{e}"
+                            f"親コメント '{parent_id}' の返信取得中にエラーが発生しました。\nエラー概要: {error_summary}"
                         )
                         stop_after_current_thread_page = True
                         break
@@ -300,7 +333,8 @@ def fetch_all_comments(
                     if progress_callback:
                         progress_callback(
                             comments_fetched_count,
-                            (total_threads_expected + total_replies_expected) if comment_threads_completed else None,
+                            (total_threads_expected +
+                             total_replies_expected) if comment_threads_completed else None,
                             f"返信コメント取得中... ({comments_fetched_count}件)"
                         )
 
@@ -315,7 +349,8 @@ def fetch_all_comments(
             if progress_callback:
                 progress_callback(
                     comments_fetched_count,
-                    (total_threads_expected + total_replies_expected) if comment_threads_completed else None,
+                    (total_threads_expected +
+                     total_replies_expected) if comment_threads_completed else None,
                     f"コメント取得中... ({comments_fetched_count}件)"
                 )
 
@@ -368,21 +403,24 @@ def fetch_all_comments(
                 logger.warning(f"{message} (API reason: {api_error_reason})")
                 tk_notifications.show_warning("動画を確認できません", message)
             else:
-                message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {e}"
+                error_summary = _safe_exception_summary(e)
+                message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {error_summary}"
                 record_error("comment_threads", message)
                 logger.error(message)
-                if getattr(getattr(e, "resp", None), "status", None) == 403 and "quotaExceeded" in str(e):
+                if _get_api_error_reason(e) == "quotaExceeded":
                     logger.critical("APIクォータ制限に達しました。")
                 tk_notifications.show_error(
                     "APIエラー",
-                    f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\n{e}"
+                    f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\nエラー概要: {error_summary}"
                 )
             break
         except Exception as e:
-            message = f"コメントスレッド取得中に予期せぬエラーが発生しました: {e}"
+            error_summary = _safe_exception_summary(e)
+            message = f"コメントスレッド取得中に予期せぬエラーが発生しました: {error_summary}"
             record_error("comment_threads", message)
             logger.error(message)
-            tk_notifications.show_error("エラー", f"コメントスレッド取得中にエラーが発生しました。\n{e}")
+            tk_notifications.show_error(
+                "エラー", f"コメントスレッド取得中にエラーが発生しました。\nエラー概要: {error_summary}")
             break
 
     # 全コメントスレッドのページングが完了した場合に限り、返信見込み数も含む
