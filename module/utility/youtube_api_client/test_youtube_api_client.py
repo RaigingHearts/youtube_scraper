@@ -376,6 +376,52 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         show_warning.assert_called_once()
         show_error.assert_not_called()
 
+    @patch.object(youtube_api_client, "get_youtube_service")
+    @patch.object(youtube_api_client.tk_notifications, "show_error")
+    def test_progress_total_is_confirmed_only_after_last_thread_is_processed(
+        self, _show_error, get_service
+    ):
+        thread_response = {
+            "items": [
+                {
+                    "id": "parent-1",
+                    "snippet": {
+                        "totalReplyCount": 1,
+                        "topLevelComment": {"id": "parent-1"}
+                    }
+                },
+                {
+                    "id": "parent-2",
+                    "snippet": {
+                        "totalReplyCount": 0,
+                        "topLevelComment": {"id": "parent-2"}
+                    }
+                }
+            ]
+        }
+        reply_page = {"items": [{"id": "reply-1"}]}
+        service = make_service(thread_response, [reply_page])
+        get_service.return_value = service
+        progress_updates = []
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key",
+            "video",
+            progress_callback=lambda current, total, message: (
+                progress_updates.append((current, total))
+            )
+        )
+
+        self.assertEqual(data["fetch_status"], "complete")
+        self.assertEqual(fetched_count, 3)
+        self.assertEqual(expected_count, 3)
+
+        # 最初の親コメントの返信取得中は、2件目の親コメントが未集計。
+        self.assertEqual(progress_updates[0], (2, None))
+
+        # 最終スレッドの処理終了後に総数が確定する。
+        self.assertEqual(progress_updates[-1], (3, 3))
+
 
 class SensitiveErrorLoggingTests(unittest.TestCase):
     def test_api_error_reason_parser_handles_unexpected_json_shapes(self):

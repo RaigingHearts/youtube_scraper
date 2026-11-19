@@ -334,7 +334,9 @@ def fetch_all_comments(
                         progress_callback(
                             comments_fetched_count,
                             (total_threads_expected +
-                             total_replies_expected) if comment_threads_completed else None,
+                             total_replies_expected)
+                            if comment_threads_completed and thread_index == len(thread_items)
+                            else None,
                             f"返信コメント取得中... ({comments_fetched_count}件)"
                         )
 
@@ -350,7 +352,9 @@ def fetch_all_comments(
                 progress_callback(
                     comments_fetched_count,
                     (total_threads_expected +
-                     total_replies_expected) if comment_threads_completed else None,
+                     total_replies_expected)
+                    if comment_threads_completed and not stop_after_current_thread_page
+                    else None,
                     f"コメント取得中... ({comments_fetched_count}件)"
                 )
 
