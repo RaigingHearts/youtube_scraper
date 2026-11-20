@@ -12,23 +12,33 @@ __pycache__/
 venv/
 env/
 .env/
-.tox/ # tox testvenv
+
+# tox testvenv
+.tox/
 
 # Editor files
-.vscode/  # VS Codeのワークスペース設定は通常含めますが、ここでは例として除外
-.idea/    # PyCharmなど他のIDEの設定
-.vscode/tasks.json
+# VS Codeのワークスペース設定
+.vscode/
+
+# PyCharmなど他のIDEの設定
+.idea/
 
 # Build artifacts
-dist/     # PyInstallerの出力ディレクトリなど
 build/
-*.spec    # SPECファイルも除外したい場合
+# PyInstallerの出力ディレクトリなど
+dist/
+# PyInstallerのSPECファイル
+*.spec
 
 # Pytest
 .pytest_cache/
 
 # application template
+# 暗号化ライブラリが生成する暗号化キー
 *.key
+# アプリケーションの設定用ファイル
 *settings.json
+# アプリケーションのログ出力ファイル
 *.log
+# アプリケーションが取得したデータ群など
 youtube_data_*/
