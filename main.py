@@ -280,7 +280,11 @@ class YouTubeCommentScraperApp:
             # 最終的なメッセージ表示ロジック
             message_parts = []
             if comments_saved:
-                message_parts.append(f"{fetched_count} 件のコメントを '{comment_filename}' に")
+                message_parts.append(
+                    f"ユニークコメント数: {fetched_count} 件"
+                    f"（保存するRawデータは重複レコードを保持）"
+                    f" - '{comment_filename}'"
+                )
             if replies_saved:
                 message_parts.append(f"返信コメントRawデータを '{replies_filename}' に")
             if video_info_saved:

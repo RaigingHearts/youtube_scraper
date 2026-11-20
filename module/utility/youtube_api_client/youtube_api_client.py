@@ -4,6 +4,7 @@ YouTube Data APIを利用して動画・チャンネル情報とコメントを�
 # youtube_api_client.py # コピーペースト作業での識別用。除去しないこと
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -24,7 +25,8 @@ COMMENT_FETCH_THRESHOLD = 100
 def get_youtube_service(api_key: str) -> Any:
     """YouTube Data APIサービスオブジェクトを構築して返す。"""
     try:
-        service = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=api_key)
+        service = build(YOUTUBE_API_SERVICE_NAME,
+                        YOUTUBE_API_VERSION, developerKey=api_key)
         logger.info("YouTube APIサービスオブジェクトを構築しました。")
         return service
     except Exception as e:
@@ -75,6 +77,13 @@ def _get_api_error_reason(error: HttpError) -> Optional[str]:
     return None
 
 
+def _token_fingerprint(token: Optional[str]) -> str:
+    """ページトークンの内容を露出させず、ログ上で同一性を追跡する。"""
+    if not token:
+        return "none"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
 def _safe_exception_summary(error: Exception) -> str:
     """例外文字列に含まれ得るURL・APIキー・ページトークンを出さず概要を返す。"""
     details = [type(error).__name__]
@@ -91,7 +100,8 @@ def _safe_exception_summary(error: Exception) -> str:
 def fetch_all_comments(
     api_key: str,
     video_id: str,
-    progress_callback: Optional[Callable[[int, int, Optional[str]], None]] = None,
+    progress_callback: Optional[Callable[[
+        int, Optional[int], Optional[str]], None]] = None,
     confirm_callback: Optional[Callable[[str], bool]] = None
 ) -> tuple[dict, int, int]:
     """
@@ -117,14 +127,23 @@ def fetch_all_comments(
         logger.error(message)
         return result_data, 0, 0
 
+    # 取得件数はユニークコメント数として扱い、Rawレコード数は別途記録する。
     comments_fetched_count = 0
     total_threads_expected = 0
     total_replies_expected = 0
+    raw_thread_records_count = 0
+    raw_reply_records_count = 0
+    duplicate_parent_count = 0
+    duplicate_reply_count = 0
+    seen_parent_ids: set[str] = set()
+    seen_reply_ids: set[str] = set()
+    thread_page_number = 0
     next_page_token = None
     continuation_prompted = False
     stop_after_current_thread_page = False
     user_cancelled = False
     comment_threads_completed = False
+    expected_total_confirmed = False
     comments_disabled = False
 
     def record_error(stage: str, message: str) -> None:
@@ -139,8 +158,8 @@ def fetch_all_comments(
             video_snippet = video_response["items"][0].get("snippet", {})
             channel_id = video_snippet.get("channelId")
             logger.info(f"動画情報取得: タイトル='{video_snippet.get('title', 'タイトル不明')}', "
-                f"投稿者='{video_snippet.get('channelTitle', '投稿者不明')}'"
-            )
+                        f"投稿者='{video_snippet.get('channelTitle', '投稿者不明')}'"
+                        )
         else:
             message = f"動画ID '{video_id}' の情報が見つかりませんでした。"
             record_error("video_info", message)
@@ -178,38 +197,65 @@ def fetch_all_comments(
     # コメントスレッドと返信
     while True:
         try:
+            thread_page_number += 1
+            request_page_token = next_page_token
+            logger.debug(
+                "コメントスレッドページ取得開始: page=%d, request_token=%s",
+                thread_page_number,
+                _token_fingerprint(request_page_token)
+            )
             response = service.commentThreads().list(
                 part="snippet,replies",
                 videoId=video_id,
                 maxResults=100,
-                pageToken=next_page_token,
+                pageToken=request_page_token,
                 textFormat="plainText"
             ).execute()
             result_data["comment_threads_raw_responses"].append(response)
 
             thread_items = response.get("items", [])
-            # pageInfo.totalResults はページ単位の値として返る場合があるため、
-            # 全ページのitems数を累積して親コメントの取得見込み数を求める。
-            total_threads_expected += len(thread_items)
-            # 現在ページ内の返信見込み数を先に集計し、返信取得途中でも
-            # このページまでの見込み数が欠落しないようにする。
-            total_replies_expected += sum(
-                (thread.get("snippet", {}).get("totalReplyCount", 0) or 0)
-                for thread in thread_items
-            )
+            raw_thread_records_count += len(thread_items)
             next_page_token = response.get("nextPageToken")
+            logger.debug(
+                "コメントスレッドページ取得完了: page=%d, records=%d, next_token=%s",
+                thread_page_number,
+                len(thread_items),
+                _token_fingerprint(next_page_token)
+            )
             comment_threads_completed = not bool(next_page_token)
 
-            for thread in thread_items:
-                comments_fetched_count += 1  # スレッドの親コメント
+            thread_items_accounted = 0
+            for thread_index, thread in enumerate(thread_items, start=1):
                 thread_snippet = thread.get("snippet", {})
                 reply_count = thread_snippet.get("totalReplyCount", 0) or 0
+                parent_comment = thread_snippet.get("topLevelComment", {})
+                parent_id = parent_comment.get("id") or thread.get("id")
+
+                if parent_id and parent_id in seen_parent_ids:
+                    duplicate_parent_count += 1
+                    logger.warning(
+                        "親コメントの重複を検出: id=%s, page=%d, item=%d",
+                        parent_id,
+                        thread_page_number,
+                        thread_index
+                    )
+                    thread_items_accounted += 1
+                    if comment_threads_completed and thread_items_accounted == len(thread_items):
+                        expected_total_confirmed = True
+                    continue
+
+                if parent_id:
+                    seen_parent_ids.add(parent_id)
+                comments_fetched_count += 1
+                total_threads_expected += 1
+                total_replies_expected += reply_count
+                thread_items_accounted += 1
+                if comment_threads_completed and thread_items_accounted == len(thread_items):
+                    expected_total_confirmed = True
 
                 if reply_count <= 0:
                     continue
 
-                parent_comment = thread_snippet.get("topLevelComment", {})
-                parent_id = parent_comment.get("id") or thread.get("id")
                 if not parent_id:
                     message = "返信数が記録されたスレッドに親コメントIDがないため、返信取得をスキップしました。"
                     record_error("reply_comments", message)
@@ -217,11 +263,21 @@ def fetch_all_comments(
                     continue
 
                 reply_record = {"parent_id": parent_id, "raw_responses": []}
-                result_data["comment_replies_raw_responses"].append(reply_record)
+                result_data["comment_replies_raw_responses"].append(
+                    reply_record)
                 reply_page_token = None
+                reply_page_number = 0
 
                 while True:
                     try:
+                        reply_page_number += 1
+                        request_reply_page_token = reply_page_token
+                        logger.debug(
+                            "返信ページ取得開始: parent_id=%s, page=%d, request_token=%s",
+                            parent_id,
+                            reply_page_number,
+                            _token_fingerprint(request_reply_page_token)
+                        )
                         reply_response = service.comments().list(
                             part="snippet",
                             parentId=parent_id,
@@ -257,16 +313,42 @@ def fetch_all_comments(
 
                     # APIレスポンスを加工せず、ページ単位でそのまま保存する
                     reply_record["raw_responses"].append(reply_response)
-                    fetched_on_page = len(reply_response.get("items", []))
+                    reply_items = reply_response.get("items", [])
+                    next_reply_page_token = reply_response.get("nextPageToken")
+                    logger.debug(
+                        "返信ページ取得完了: parent_id=%s, page=%d, records=%d, next_token=%s",
+                        parent_id,
+                        reply_page_number,
+                        len(reply_items),
+                        _token_fingerprint(next_reply_page_token)
+                    )
+                    raw_reply_records_count += len(reply_items)
+                    fetched_on_page = 0
+                    for reply_item in reply_items:
+                        reply_id = reply_item.get("id")
+                        if reply_id and reply_id in seen_reply_ids:
+                            duplicate_reply_count += 1
+                            logger.warning(
+                                "返信コメントの重複を検出: id=%s, parent_id=%s",
+                                reply_id,
+                                parent_id
+                            )
+                            continue
+                        if reply_id:
+                            seen_reply_ids.add(reply_id)
+                        fetched_on_page += 1
                     comments_fetched_count += fetched_on_page
                     if progress_callback:
                         progress_callback(
                             comments_fetched_count,
-                            (total_threads_expected + total_replies_expected) if comment_threads_completed else None,
+                            (total_threads_expected +
+                             total_replies_expected)
+                            if expected_total_confirmed
+                            else None,
                             f"返信コメント取得中... ({comments_fetched_count}件)"
                         )
 
-                    reply_page_token = reply_response.get("nextPageToken")
+                    reply_page_token = next_reply_page_token
                     if not reply_page_token:
                         break
                     time.sleep(0.1)
@@ -274,10 +356,16 @@ def fetch_all_comments(
                 if stop_after_current_thread_page:
                     break
 
+            if comment_threads_completed and thread_items_accounted == len(thread_items):
+                expected_total_confirmed = True
+
             if progress_callback:
                 progress_callback(
                     comments_fetched_count,
-                    (total_threads_expected + total_replies_expected) if comment_threads_completed else None,
+                    (total_threads_expected +
+                     total_replies_expected)
+                    if expected_total_confirmed
+                    else None,
                     f"コメント取得中... ({comments_fetched_count}件)"
                 )
 
@@ -346,13 +434,14 @@ def fetch_all_comments(
             message = f"コメントスレッド取得中に予期せぬエラーが発生しました: {error_summary}"
             record_error("comment_threads", message)
             logger.error(message)
-            tk_notifications.show_error("エラー", f"コメントスレッド取得中にエラーが発生しました。\nエラー概要: {error_summary}")
+            tk_notifications.show_error(
+                "エラー", f"コメントスレッド取得中にエラーが発生しました。\nエラー概要: {error_summary}")
             break
 
     # 全コメントスレッドのページングが完了した場合に限り、返信見込み数も含む
     # 合計を確定値として返す。途中中断・ページ取得失敗時は未確定(0)とする。
     total_comments_expected = (
-        total_threads_expected + total_replies_expected if comment_threads_completed else 0
+        total_threads_expected + total_replies_expected if expected_total_confirmed else 0
     )
     if comments_disabled:
         result_data["fetch_status"] = "comments_disabled"
@@ -365,8 +454,17 @@ def fetch_all_comments(
     else:
         result_data["fetch_status"] = "failed"
 
-    logger.info(f"コメント取得終了: 状態={result_data['fetch_status']}, 取得数={comments_fetched_count}, "
-        f"取得見込み={total_comments_expected if comment_threads_completed else '未確定'}, "
-        f"返信スレッド数={len(result_data['comment_replies_raw_responses'])}"
+    logger.info(
+        "コメント取得終了: 状態=%s, ユニーク取得数=%d, ユニーク取得見込み=%s, "
+        "親コメントRawレコード数=%d, 返信Rawレコード数=%d, "
+        "親コメント重複=%d, 返信コメント重複=%d, 返信取得スレッド数=%d",
+        result_data["fetch_status"],
+        comments_fetched_count,
+        total_comments_expected if expected_total_confirmed else "未確定",
+        raw_thread_records_count,
+        raw_reply_records_count,
+        duplicate_parent_count,
+        duplicate_reply_count,
+        len(result_data["comment_replies_raw_responses"])
     )
     return result_data, comments_fetched_count, total_comments_expected
