@@ -148,7 +148,16 @@ class YouTubeCommentScraperApp:
         if not video_id:
             tk_notifications.show_warning("入力エラー", "動画IDを入力してください。", parent=self.master)
             return
-        
+
+        if not youtube_utils.is_valid_video_id(video_id):
+            tk_notifications.show_error(
+                "入力エラー",
+                "動画IDは11文字の英数字・ハイフン・アンダースコアで入力してください。",
+                parent=self.master
+            )
+            logger.warning("不正な形式の動画IDが入力されました。")
+            return
+
         # GUIの状態を更新
         self.scrape_button.config(state=tk.DISABLED)
         self.open_json_button.config(state=tk.DISABLED)
