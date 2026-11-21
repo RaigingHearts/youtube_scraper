@@ -189,6 +189,9 @@ class YouTubeCommentScraperApp:
         except Exception as exc:
             logger.exception("ワーカーの起動に失敗しました。")
             self.scrape_button.config(state=tk.NORMAL)
+            tk_async_tasks._perform_gui_update(
+                self.progress_label, self.progress_bar, 0, 0, "準備完了"
+            )
             tk_notifications.show_error("起動失敗", str(exc), parent=self.master)
 
     def _scrape_comments_task(self, worker_handle: tk_async_tasks.WorkerHandle, video_id: str):
@@ -462,10 +465,12 @@ class YouTubeCommentScraperApp:
             # 通知表示の成否にかかわらずGUI状態を復旧してからWorkerHandleを解放する。
             self.scrape_button.config(state=tk.NORMAL)
             maximum = self.progress_bar["maximum"]
-            tk_async_tasks._perform_gui_update(
-                self.progress_label, self.progress_bar, maximum, maximum, "コメント取得処理終了"
-            )
-            self.worker_handle = None
+            try:
+                tk_async_tasks._perform_gui_update(
+                    self.progress_label, self.progress_bar, maximum, maximum, "コメント取得処理終了"
+                )
+            finally:
+                self.worker_handle = None
 
 
     def _open_json_file(self):
