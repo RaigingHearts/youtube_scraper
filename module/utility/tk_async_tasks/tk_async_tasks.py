@@ -18,6 +18,138 @@ Tkinterアプリケーション特化 / モジュールタイプ：ユーティ�
 # tk_async_tasks.py # コピーペースト作業での識別用。除去しないこと
 from __future__ import annotations
 
+import logging
+import queue
+import threading
+import tkinter as tk
+import uuid
+from dataclasses import dataclass, field
+from tkinter import ttk, messagebox
+from typing import Any, Callable, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class GuiRequest:
+    """ワーカーからメインスレッドへ渡すGUI要求。payloadにTkinterオブジェクトを含めない。"""
+
+    kind: str
+    payload: Dict[str, Any] = field(default_factory=dict)
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    response_event: Optional[threading.Event] = None
+    response: Optional[bool] = None
+    answered: bool = False
+    response_reason: Optional[str] = None
+
+    def __post_init__(self):
+        if self.kind == "confirmation" and self.response_event is None:
+            self.response_event = threading.Event()
+
+
+@dataclass
+class WorkerHandle:
+    """一つのワーカー実行に関する状態・結果・同期オブジェクトを保持する。"""
+
+    gui_request_queue: queue.Queue
+    thread: Optional[threading.Thread] = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    done_event: threading.Event = field(default_factory=threading.Event)
+    result: Any = None
+    exception: Optional[BaseException] = None
+    partial_result: Dict[str, Any] = field(default_factory=lambda: {"saved_files": []})
+
+    progress_lock: threading.Lock = field(default_factory=threading.Lock)
+    latest_progress: Optional[Dict[str, Any]] = None
+    progress_marker_queued: bool = False
+
+    confirmation_lock: threading.Lock = field(default_factory=threading.Lock)
+    pending_confirmations: Dict[str, GuiRequest] = field(default_factory=dict)
+
+    shutdown_lock: threading.Lock = field(default_factory=threading.Lock)
+    shutdown_decision_event: threading.Event = field(default_factory=threading.Event)
+    shutdown_pending: bool = False
+    save_policy: Optional[str] = None
+    save_started: bool = False
+    cancel_reason: Optional[str] = None
+
+    def publish_progress(self, progress: Dict[str, Any]) -> None:
+        """最新進捗を保持し、未登録の場合だけキューマーカーを追加する。"""
+        with self.progress_lock:
+            self.latest_progress = progress
+            if not self.progress_marker_queued:
+                self.gui_request_queue.put(GuiRequest(kind="progress"))
+                self.progress_marker_queued = True
+
+    def take_latest_progress(self) -> Optional[Dict[str, Any]]:
+        """最新進捗を取得し、次のマーカー登録を許可する。"""
+        with self.progress_lock:
+            progress = self.latest_progress
+            self.progress_marker_queued = False
+            return progress
+
+
+def run_task_in_thread(task_function: Callable, gui_request_queue, *args, **kwargs) -> WorkerHandle:
+    """
+    ワーカーを起動し、実行状態・結果・例外を保持するWorkerHandleを返す。
+
+    新方式:
+        run_task_in_thread(task_function, gui_request_queue, *args, **kwargs)
+        task_functionにはWorkerHandleを第1引数として渡す。
+
+    旧方式:
+        run_task_in_thread(master_root, task_function, *args, **kwargs)
+        移行期間中の既存呼び出しではWorkerHandleをタスクへ渡さず、従来どおり実行する。
+    """
+    legacy_call = isinstance(task_function, tk.Misc)
+    if legacy_call:
+        legacy_task_function = gui_request_queue
+        request_queue = queue.Queue()
+        actual_task_function = legacy_task_function
+    else:
+        if not isinstance(gui_request_queue, queue.Queue):
+            raise TypeError("gui_request_queue must be an instance of queue.Queue")
+        request_queue = gui_request_queue
+        actual_task_function = task_function
+
+    task_name = getattr(actual_task_function, "__name__", repr(actual_task_function))
+    handle = WorkerHandle(gui_request_queue=request_queue)
+
+    def worker_wrapper():
+        try:
+            if legacy_call:
+                handle.result = actual_task_function(*args, **kwargs)
+            else:
+                handle.result = actual_task_function(handle, *args, **kwargs)
+        except BaseException as exc:
+            handle.exception = exc
+            logger.exception("ワーカー '%s' の実行中に例外が発生しました。", task_name)
+        finally:
+            handle.done_event.set()
+            logger.info("ワーカー '%s' が終了しました。", task_name)
+
+    thread = threading.Thread(target=worker_wrapper, name="youtube-scraper-worker")
+    thread.daemon = True  # 非daemon化は終了制御を実装するStage 4で行う。
+    handle.thread = thread
+
+    logger.info("タスク '%s' を別スレッドで開始します。", task_name)
+    try:
+        thread.start()
+    except BaseException:
+        # 起動失敗はワーカー関数の例外終了として扱わず、呼び出し元へ伝播させる。
+        handle.done_event.set()
+        raise
+
+    return handle
+
+def update_progress_gui(master_root, progress_label, progress_bar, current_comments, total_comments):"
+├── "ユーザーに続行を確認するダイアログを表示する（スレッドセーフ）"
+│   └── "def confirm_continuation_gui(master_root, message):"
+コピペ編集用罫線 '━┃┏┓┛┗┣┳┫┻╋' '─│┌┐┘└├┬┤┴┼'
+"""
+# tk_async_tasks.py # コピーペースト作業での識別用。除去しないこと
+from __future__ import annotations
+
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
