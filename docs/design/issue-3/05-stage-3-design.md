@@ -3,24 +3,31 @@
 ## 1. 目的
 継続確認をthreading.Event方式へ移行し、youtube_api_client.pyからTkinter依存を除去する。
 
-## 2. 継続確認
-ワーカーはconfirmation要求をGUI要求キューへ登録し、要求ごとのEventを待つ。要求には確認内容、response_event、responseを含める。メインスレッドはダイアログで回答を得て、responseを確定してからEventを設定する。Trueは継続、Falseは中止。
+## 2. 継続確認要求
+ワーカーはconfirmation要求をGUI要求キューへ登録し、要求ごとのresponse_eventを待つ。要求はrequest_id、message、response_event、response、answeredを持つ。responseの初期値は未確定を表す値とし、answered=Falseとする。要求の登録・回答確定・終了時解除はWorkerHandleの確認要求管理機構で追跡する。
 
-ダイアログ表示例外時はFalseを既定値としてEventを設定する。未回答要求はWorkerHandleに関連付けて管理し、終了処理で解除できるようにする。回答確定後の値を上書きしない。
+メインスレッドは確認ダイアログで回答を得た後、要求のansweredを確認し、未回答の場合だけresponseを設定してanswered=Trueにし、response_eventを設定する。Trueは継続、Falseは中止。回答確定とEvent設定は一つの排他的操作として扱う。
 
-## 3. APIクライアントのGUI依存解消
-youtube_api_client.pyからtkinterおよびtk_notificationsのimportとダイアログ呼び出しを除去する。APIクライアントは結果・エラー情報を返し、通知はmain.pyがGUI要求キュー経由で行う。既存ログとエラー情報の意味は可能な限り維持する。
+ダイアログ表示例外、または表示できない状態で要求を処理した場合はFalseを既定値として一度だけ確定し、必ずEventを設定する。終了処理も未回答要求をFalseで解除する。すでに回答済みの値を上書きしない。遅延したダイアログ応答が到着してもanswered=Trueなら破棄する。
 
-## 4. 返却構造
-fetch_all_comments()の既存返却タプル(result_data, fetched_count, total_expected)を原則維持する。fetch_status等の既存状態と意味を調査し、新しいエラー体系を安易に追加しない。
+## 3. モーダルダイアログの直列化
+確認、通常通知、終了確認を同時に表示しない。メインスレッドのダイアログ管理で一件ずつ処理する。確認ダイアログ表示中に終了要求が到着した場合は、現在のダイアログ応答を確定・解除してから終了要求を処理する。終了処理開始後は新しい確認ダイアログを表示せず、未回答要求はFalseで解除する。
 
-現行コードにはfetch_status="cancelled"が存在する。Stage 4の終了要求によるキャンセルでも再利用する。従来の継続確認による中断との意味の整合性を維持する。
+## 4. APIクライアントのGUI依存解消
+youtube_api_client.pyからtkinterおよびtk_notificationsのimportとダイアログ呼び出しを除去する。APIクライアントはログとresult_data内のエラー情報を維持し、利用者への通知に相当する情報を呼び出し元が判断できる形で返す。エラーを記録する責務とGUI通知を表示する責務を分離し、同一エラーの二重通知を避ける。通知方針はエラー種別と既存の利用者向け挙動を照合して定義する。
 
-## 5. キャンセル引数への準備
-Stage 4でfetch_all_comments()にthreading.Eventを渡せるようにする。APIクライアントはEventだけを扱い、TkinterやWorkerHandleに依存しない。
+サービス生成、動画情報、チャンネル情報、コメントスレッド、返信ページの各失敗について、例外・エラー情報・ログを保持する。APIクライアントはダイアログを表示しない。ワーカー側が返却されたエラー情報をnotification要求へ変換し、メインスレッドが表示する。
 
-## 6. 旧方式の整理
-confirm_continuation_gui()、BooleanVar、wait_variableを利用する旧方式は全呼び出し箇所の移行後に削除する。
+## 5. 返却構造とキャンセル理由
+fetch_all_comments()の既存返却タプル(result_data, fetched_count, total_expected)を維持する。既存fetch_statusと既存result_dataの主要構造を維持し、新しい必須戻り値を追加しない。
 
-## 7. 完了条件
-Event確認が正常・異常系で解除され、APIクライアントにGUI依存がなく、既存の返却タプル・取得結果・エラー状態の意味が維持されること。
+fetch_status="cancelled"は従来どおり維持する。キャンセル発生理由を区別する必要がある場合、result_dataに任意項目cancel_reasonを追加する。値はcontinuation_declinedまたはapplication_shutdownとし、キャンセル以外では項目を省略する。既存利用者がfetch_statusだけを参照しても従来どおり動作するよう、cancel_reasonは補足情報とする。
+
+## 6. Stage 4への準備
+Stage 4でfetch_all_comments()にcancel_eventを渡す。APIクライアントはEventだけを扱い、TkinterやWorkerHandleに依存しない。API要求の実行中は強制中断せず、要求の前後でEventを確認する。
+
+## 7. 旧方式の整理
+confirm_continuation_gui()、BooleanVar、wait_variableを利用する旧方式は全呼び出し箇所の移行後に削除する。旧関数の削除は新旧呼び出し箇所の検索・確認後に行い、未移行の利用者を残さない。
+
+## 8. 完了条件
+Event確認が正常・異常・終了競合の各経路で一度だけ解除され、APIクライアントにGUI依存がなく、既存の返却タプル・取得結果・エラー状態の意味が維持されること。
