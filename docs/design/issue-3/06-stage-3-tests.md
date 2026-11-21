@@ -13,7 +13,7 @@ youtube_api_client.pyがtkinterとtk_notificationsをimportせず、API処理か
 サービス生成、動画情報、チャンネル情報、コメントスレッド、返信ページの各エラーをモック化する。既存fetch_status、result_data、取得件数、返却タプル構造を維持する。同一エラーの二重通知が発生しないこと、従来通知されていた失敗とログのみだった状態の差異を確認する。
 
 ## 5. キャンセル理由
-継続確認Falseではfetch_status="cancelled"かつcancel_reason="continuation_declined"となること、アプリ終了によるEventではcancel_reason="application_shutdown"となることを確認する。cancel_reasonがない従来結果も読み取れることを確認する。
+継続確認Falseではfetch_status="cancelled"かつresult_data["cancel_reason"]="continuation_declined"となること、アプリ終了によるEventではresult_data["cancel_reason"]="application_shutdown"となることを確認する。キャンセル以外の結果ではcancel_reasonキーが存在しないことを確認する。既存のcancel_reasonキーなしデータも従来どおり読み取れることを確認する。
 
 ## 6. 継続確認統合
 Trueで後続取得、Falseで中止、部分取得データの保持、上限到達が複数回発生した場合の動作を確認する。

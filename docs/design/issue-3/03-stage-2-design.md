@@ -19,8 +19,8 @@ notification要求はkind(info/warning/error)、title、messageを持ち、通�
 ## 5. _scrape_comments_task()
 直接after()を呼ばず、ウィジェットを参照せず、tk_notificationsを直接呼ばない。進捗はWorkerHandle経由、通知はGUI要求キュー経由とする。API通信とファイル操作はワーカー側で行い、GUI更新に必要な値は戻り値に含める。last_saved_*_file_path、total_comments_expected等はメインスレッドが更新し、プログレスバー最大値などGUI状態をワーカーから読み取らない。
 
-## 6. APIクライアント
-APIクライアント内のGUI通知はStage 3で移行するため、Stage 2完了時点では残存し得る。ただしmain.pyとワーカー間の通知経路はStage 2でキュー化する。
+## 6. APIクライアント（Stage 2の移行例外）
+Stage 2では、youtube_api_client.py内部のtk_notifications呼び出しはまだ残存し得る。これは現行APIクライアントのGUI依存をStage 3で解消するための、Stage 2に限った明示的な移行例外である。したがってStage 2の「ワーカーからGUIへの直接アクセスを行わない」という完了条件・テスト対象は、main.pyおよび_scrape_comments_task()自身が行うGUI操作・通知経路に適用する。APIクライアント内部から発生する既存の直接通知はStage 2では例外として扱い、Stage 3で完全に撤去する。Stage 2で新たな直接GUI操作や通知経路を追加してはならない。
 
 ## 7. 完了条件
-main.py由来の進捗・通知表示がメインスレッドで行われ、進捗が集約され、ワーカーからGUIへの直接アクセスがなく、結果・保存情報が戻り値で受け渡され、既存の取得・保存動作が維持されること。
+main.py由来の進捗・通知表示がメインスレッドで行われ、進捗が集約され、_scrape_comments_task()自身がGUIへ直接アクセスせず、結果・保存情報が戻り値で受け渡され、既存の取得・保存動作が維持されること。Stage 2ではAPIクライアント由来の既存tk_notifications呼び出しのみを移行例外として許容し、APIクライアントを含む全経路のGUI非依存化はStage 3の完了条件とする。

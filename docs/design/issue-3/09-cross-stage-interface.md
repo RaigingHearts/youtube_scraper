@@ -11,13 +11,14 @@ WorkerHandleは一つのワーカー実行のライフサイクルを管理す�
 - done_event：ワーカー関数の終了通知
 - result：ワーカー関数の戻り値
 - exception：未処理例外
+- partial_result：処理途中で確定した保存結果を保持する構造化データ。少なくともsaved_filesの空リストを持つ
 - progress_lock、latest_progress、progress_marker_queued：進捗集約
 - confirmation_lockおよびpending_confirmations：未回答確認要求
 - shutdown_lock、shutdown_decision_event、shutdown_pending：終了判断バリア
 - save_policy、save_started：終了時保存方針と保存開始状態
 - cancel_reason：キャンセル原因の補足情報
 
-Eventは初期状態unset、フラグはFalse、result/exception/latest_progressは未設定状態から開始する。実装上のデータ型はPython 3.8.10で扱える標準型とし、新規外部依存を追加しない。
+Eventは初期状態unset、フラグはFalse、result/exception/latest_progressは未設定状態から開始する。partial_resultは保存処理開始前に初期化し、main.pyはdone_event後に読み取る。実装上のデータ型はPython 3.8.10で扱える標準型とし、新規外部依存を追加しない。
 
 ## 3. GuiRequest共通仕様
 GuiRequestはkind、payload、request_idを持ち、payloadにTkinterオブジェクトを含めない。request_idはWorkerHandle内で一意とし、要求と応答の対応付けに用いる。
@@ -31,7 +32,7 @@ GuiRequestはkind、payload、request_idを持ち、payloadにTkinterオブジ�
 run_task_in_thread(task_function, gui_request_queue, *args, **kwargs)はWorkerHandleを生成し、task_functionへWorkerHandleを第1引数として渡す。ラッパーは戻り値をresultへ格納し、未処理例外をexceptionへ格納してログに記録する。いずれの場合もfinallyでdone_eventを設定する。
 Thread.start()失敗は起動呼び出し元へ伝播させ、main.pyがGUI状態を復旧できるようにする。起動失敗をワーカー関数の例外終了として偽装しない。ワーカー関数の例外はdone_eventで終了を通知した後、メインスレッドがexceptionを回収して利用者向け通知を行う。
 
-同時実行ワーカーは1つ。done_event後も要求・result・exception・保存結果の回収とGUI後処理が終わるまではWorkerHandleを解放しない。
+同時実行ワーカーは1つ。done_event後も要求・result・exception・partial_resultの回収とGUI後処理が終わるまではWorkerHandleを解放しない。
 
 ## 5. 進捗契約
 publish_progress()はprogress_lock内でlatest_progressを置換する。progress_marker_queued=Falseならprogressマーカーをキューに登録し、同じLock保護区間でTrueにする。take_latest_progress()は同じLock内で最新値を取得し、progress_marker_queued=Falseに戻す。キュー登録・最新値更新・マーカーフラグの変更を一体として扱い、取りこぼしを防ぐ。進捗マーカーは最新値を取得するための通知であり、各更新履歴を表すものではない。
@@ -45,10 +46,10 @@ publish_progress()はprogress_lock内でlatest_progressを置換する。progres
 
 ## 8. APIクライアント契約
 youtube_api_client.pyはtkinterおよびtk_notificationsに依存しない。APIエラーのログとresult_data内のエラー情報を維持し、利用者向け通知はワーカーがnotification要求として登録する。
-fetch_all_comments()の返却タプルは(result_data, fetched_count, total_expected)を維持する。既存fetch_statusの意味を維持し、キャンセルはfetch_status="cancelled"を使用する。キャンセル理由が判別可能な場合、result_data.cancel_reasonを任意項目として付与する。
+fetch_all_comments()の返却タプルは(result_data, fetched_count, total_expected)を維持する。既存fetch_statusの意味を維持し、キャンセルはfetch_status="cancelled"を使用する。キャンセル理由が判別可能な場合、result_data["cancel_reason"]を任意項目として付与する。
 - continuation_declined：継続確認で利用者が中止した。
 - application_shutdown：アプリ終了に伴う協調的キャンセル。
-cancel_reasonは補足情報であり、既存のfetch_statusや返却タプルを置き換えない。
+cancel_reasonは補足情報であり、既存のfetch_statusや返却タプルを置き換えない。キャンセル以外の結果ではcancel_reasonキーを追加しない。既存のキーなしデータも有効な入力として扱う。
 
 ## 9. 取得タスクの結果契約
 _scrape_comments_task()はGUI所有状態を変更せず、結果を戻り値として返す。取得結果は少なくとも次を含む構造化データとする。
@@ -58,7 +59,9 @@ _scrape_comments_task()はGUI所有状態を変更せず、結果を戻り値と
 - saved_files：保存を試みたファイルごとの結果一覧
 - cancel_reason：該当する場合のキャンセル理由
 
-saved_filesの各要素はkind、path、successを持ち、失敗時はerror等の補足を持つ。保存結果を返却構造に集約し、GUI属性last_saved_*_file_path等はmain.pyが成功結果から更新する。resultはこの取得タスク結果を保持する。未処理例外はWorkerHandle.exceptionに保持し、部分的な保存結果を失わないよう可能な限り例外情報と分離して回収する。
+saved_filesの各要素はkind、path、successを持ち、失敗時はerror等の補足を持つ。保存結果を返却構造に集約し、GUI属性last_saved_*_file_path等はmain.pyが成功結果から更新する。resultはこの取得タスク結果を保持する。未処理例外はWorkerHandle.exceptionに保持する。
+
+保存結果の途中経過はWorkerHandle.partial_result["saved_files"]へ保持する。各ファイルの保存試行が確定した直後、次のファイルの試行前に結果を追加する。個別ファイルの保存例外はファイル単位の失敗として記録し、安全に続行できる場合は後続ファイルを処理する。保存処理全体の予期しない例外でタスクが中断しても、すでにpartial_resultへ記録された結果は保持する。正常終了時のresult.saved_filesはpartial_result["saved_files"]と一致させる。異常終了時はdone_event後にmain.pyがexceptionとpartial_resultを別々に回収し、確定済みの部分結果を失わない。未試行ファイルの結果を推測して追加しない。
 
 ## 10. 終了判断・保存開始の同期契約
 終了確認ダイアログを表示する前にmain.pyはshutdown_lock内でshutdown_pending=Trueとし、shutdown_decision_eventを未設定にする。ワーカーは保存開始直前に同じLockを取得する。
@@ -86,7 +89,7 @@ APIリクエスト開始前にcancel_eventを確認する。execute()実行中�
 ワーカー自然終了が終了ダイアログ表示中に発生した場合は、選択を遅れて適用せず、通常の完了回収へ移る。二重の完了処理・追加保存を行わない。
 
 ## 13. 終了時の通知・破棄順序
-終了時は、ワーカー終了検知、未処理要求回収、result/exception/保存結果回収、GUI後処理、通知サマリー表示、WorkerHandle解放、root破棄の順とする。終了待機中もGUIイベントループを動作させる。root破棄後にafter()を登録しない。
+終了時は、ワーカー終了検知、未処理要求回収、result/exception/partial_result（保存結果を含む）回収、GUI後処理、通知サマリー表示、WorkerHandle解放、root破棄の順とする。終了待機中もGUIイベントループを動作させる。root破棄後にafter()を登録しない。
 
 ## 14. 互換性・旧方式の撤去
 Python 3.8.10を維持し、新規外部依存を追加しない。queue/threading等の標準ライブラリを使用する。
