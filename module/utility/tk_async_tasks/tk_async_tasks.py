@@ -142,38 +142,6 @@ def run_task_in_thread(task_function: Callable, gui_request_queue, *args, **kwar
 
     return handle
 
-def update_progress_gui(master_root, progress_label, progress_bar, current_comments, total_comments):"
-├── "ユーザーに続行を確認するダイアログを表示する（スレッドセーフ）"
-│   └── "def confirm_continuation_gui(master_root, message):"
-コピペ編集用罫線 '━┃┏┓┛┗┣┳┫┻╋' '─│┌┐┘└├┬┤┴┼'
-"""
-# tk_async_tasks.py # コピーペースト作業での識別用。除去しないこと
-from __future__ import annotations
-
-import threading
-import tkinter as tk
-from tkinter import ttk, messagebox
-from typing import Callable, Any
-# ログ出力のためにlogger_configをインポート
-import logging
-
-logger = logging.getLogger(__name__)
-
-def run_task_in_thread(master_root: tk.Tk, task_function: Callable, *args, **kwargs):
-    """
-    時間のかかるタスクを別スレッドで実行し、GUIをブロックしないようにする。
-
-    Args:
-        master_root (tk.Tk): Tkinterのルートウィンドウオブジェクト。
-        task_function (Callable): 別スレッドで実行する関数。
-        *args: task_functionに渡す位置引数。
-        **kwargs: task_functionに渡すキーワード引数。
-    """
-    logger.info(f"タスク '{task_function.__name__}' を別スレッドで開始します。")
-    thread = threading.Thread(target=task_function, args=args, kwargs=kwargs)
-    thread.daemon = True # メインスレッド終了時にサブスレッドも終了するように設定
-    thread.start()
-
 def update_progress_gui(master_root: tk.Tk, progress_label: ttk.Label, progress_bar: ttk.Progressbar, 
                         current_value: int, max_value: int | None = None, message: str | None = None):
     """
