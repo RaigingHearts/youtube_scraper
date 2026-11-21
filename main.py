@@ -450,17 +450,22 @@ class YouTubeCommentScraperApp:
         if not self.gui_request_queue.empty():
             return
 
-        self.worker_handle = None
-        if handle.exception is not None:
-            logger.error("ワーカーが例外終了しました。",
-                         exc_info=(type(handle.exception), handle.exception, handle.exception.__traceback__))
-            tk_notifications.show_error("取得失敗", str(handle.exception), parent=self.master)
-
-        self.scrape_button.config(state=tk.NORMAL)
-        maximum = self.progress_bar["maximum"]
-        tk_async_tasks._perform_gui_update(
-            self.progress_label, self.progress_bar, maximum, maximum, "コメント取得処理終了"
-        )
+        try:
+            if handle.exception is not None:
+                logger.error("ワーカーが例外終了しました。",
+                             exc_info=(type(handle.exception), handle.exception, handle.exception.__traceback__))
+                try:
+                    tk_notifications.show_error("取得失敗", str(handle.exception), parent=self.master)
+                except Exception:
+                    logger.exception("ワーカー例外の通知表示に失敗しました。")
+        finally:
+            # 通知表示の成否にかかわらずGUI状態を復旧してからWorkerHandleを解放する。
+            self.scrape_button.config(state=tk.NORMAL)
+            maximum = self.progress_bar["maximum"]
+            tk_async_tasks._perform_gui_update(
+                self.progress_label, self.progress_bar, maximum, maximum, "コメント取得処理終了"
+            )
+            self.worker_handle = None
 
 
     def _open_json_file(self):
