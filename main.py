@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import logging
 import sys
 import threading
@@ -51,12 +52,18 @@ class YouTubeCommentScraperApp:
         self.last_saved_channel_info_file_path: str | None = None  # 最後に保存したチャンネル情報ファイルのパス
         self.last_saved_replies_file_path: str | None = None  # 最後に保存した返信コメントファイルのパス
 
+        # Stage 1: GUI要求キューとワーカー参照をアプリケーション側で所有する。
+        self.gui_request_queue = queue.Queue()
+        self.worker_handle: Optional[tk_async_tasks.WorkerHandle] = None
+        self._gui_poll_after_id = None
+
         # アプリケーション起動時にAPIキーを確認・プロンプト
         self._initialize_api_key()
         
         # APIキーが取得できた場合のみGUIを構築
         if self.api_key:
             self._create_widgets()
+            self._schedule_gui_request_polling()
         else:
             # APIキーが設定されなかった場合はアプリケーションを終了
             # tk_app_settingsですでにログ出力されているため、ここではGUIを破棄するのみ
@@ -140,6 +147,9 @@ class YouTubeCommentScraperApp:
 
     def _start_scrape_process(self):
         """コメント取得処理を別スレッドで開始する。"""
+        if self.worker_handle is not None:
+            logger.warning("前のワーカーの完了処理が残っているため、新規起動を拒否しました。")
+            return
         if not self.api_key:
             tk_notifications.show_error("APIキーエラー", "APIキーが設定されていません。", parent=self.master)
             return
@@ -169,14 +179,19 @@ class YouTubeCommentScraperApp:
         self.last_saved_channel_info_file_path = None
         self.last_saved_replies_file_path = None
 
-        # tk_async_tasksモジュールを使用して、コメント取得処理を別スレッドで実行
-        tk_async_tasks.run_task_in_thread(
-            self.master, 
-            self._scrape_comments_task, 
-            video_id
-        )
+        # WorkerHandleを保持し、完了・例外・GUI要求をメインスレッドで回収する。
+        try:
+            self.worker_handle = tk_async_tasks.run_task_in_thread(
+                self._scrape_comments_task,
+                self.gui_request_queue,
+                video_id
+            )
+        except Exception as exc:
+            logger.exception("ワーカーの起動に失敗しました。")
+            self.scrape_button.config(state=tk.NORMAL)
+            tk_notifications.show_error("起動失敗", str(exc), parent=self.master)
 
-    def _scrape_comments_task(self, video_id: str):
+    def _scrape_comments_task(self, worker_handle: tk_async_tasks.WorkerHandle, video_id: str):
         """
         コメント取得のメイン処理（別スレッドで実行される）。
         youtube_api_clientと連携し、進捗をGUIに反映させる。
@@ -340,13 +355,112 @@ class YouTubeCommentScraperApp:
             error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
             tk_notifications.show_error("取得失敗", error_summary or "コメントの取得に失敗しました。ログを確認してください。", parent=self.master)
 
-        # 処理完了後のGUI状態を更新
-        self.master.after(0, lambda: self.scrape_button.config(state=tk.NORMAL))
-        self.master.after(0, lambda: tk_async_tasks._perform_gui_update(
-            self.progress_label, self.progress_bar, 
-            self.progress_bar["maximum"], self.progress_bar["maximum"], # 完了状態に設定
-            "コメント取得処理終了"
-        ))
+    def _schedule_gui_request_polling(self):
+        """GUI要求キューとワーカー状態をメインスレッドで定期確認する。"""
+        if self._gui_poll_after_id is not None:
+            return
+        try:
+            self._gui_poll_after_id = self.master.after(50, self._poll_gui_requests)
+        except tk.TclError:
+            self._gui_poll_after_id = None
+
+    def _poll_gui_requests(self):
+        """最大50件ずつGUI要求を処理し、残件があれば次回も確認する。"""
+        self._gui_poll_after_id = None
+        processed = 0
+        while processed < 50:
+            try:
+                request = self.gui_request_queue.get_nowait()
+            except queue.Empty:
+                break
+            processed += 1
+            try:
+                self._handle_gui_request(request)
+            except Exception:
+                logger.exception("GUI要求の処理中に例外が発生しました。")
+
+        handle = self.worker_handle
+        if handle is not None and handle.done_event.is_set() and self.gui_request_queue.empty():
+            self._finish_worker(handle)
+
+        # 上限到達時に残件がある場合も、次回ポーリングを必ず予約する。
+        self._schedule_gui_request_polling()
+
+    def _handle_gui_request(self, request: tk_async_tasks.GuiRequest):
+        """要求種別に応じた処理をメインスレッドで振り分ける。"""
+        if not isinstance(request, tk_async_tasks.GuiRequest):
+            logger.warning("GuiRequest以外のオブジェクトを受信しました: %r", request)
+            return
+
+        if request.kind == "progress":
+            handle = self.worker_handle
+            progress = handle.take_latest_progress() if handle is not None else None
+            if not progress:
+                return
+            current = progress.get("current_comments", progress.get("current_value", 0))
+            total = progress.get("total_comments", progress.get("max_value"))
+            message = progress.get("message")
+            tk_async_tasks._perform_gui_update(
+                self.progress_label, self.progress_bar, current, total, message
+            )
+            if hasattr(self, "comment_count_label"):
+                count_text = (f"取得コメント数: {current} / {total}"
+                              if total is not None else f"取得コメント数: {current} / 確定待ち")
+                self.comment_count_label.config(text=count_text)
+            return
+
+        if request.kind == "notification":
+            payload = request.payload
+            notification_kind = payload.get("kind", "info")
+            title = payload.get("title", "通知")
+            message = payload.get("message", "")
+            if notification_kind == "warning":
+                tk_notifications.show_warning(title, message, parent=self.master)
+            elif notification_kind == "error":
+                tk_notifications.show_error(title, message, parent=self.master)
+            else:
+                tk_notifications.show_info(title, message, parent=self.master)
+            return
+
+        if request.kind == "confirmation":
+            # 継続確認のダイアログ処理はStage 3で導入する。現段階では待機を残さない。
+            handle = self.worker_handle
+            if handle is not None:
+                with handle.confirmation_lock:
+                    if not request.answered:
+                        request.response = False
+                        request.response_reason = "confirmation_unavailable"
+                        request.answered = True
+                        if request.response_event is not None:
+                            request.response_event.set()
+            elif request.response_event is not None:
+                request.response = False
+                request.response_reason = "confirmation_unavailable"
+                request.answered = True
+                request.response_event.set()
+            logger.warning("Stage 3実装前の継続確認要求をFalseで解除しました。")
+            return
+
+        logger.warning("未知のGUI要求種別を受信しました: %s", request.kind)
+
+    def _finish_worker(self, handle: tk_async_tasks.WorkerHandle):
+        """完了情報をGUIスレッドで回収し、GUI状態を復旧する。"""
+        if self.worker_handle is not handle or not handle.done_event.is_set():
+            return
+        if not self.gui_request_queue.empty():
+            return
+
+        self.worker_handle = None
+        if handle.exception is not None:
+            logger.error("ワーカーが例外終了しました。",
+                         exc_info=(type(handle.exception), handle.exception, handle.exception.__traceback__))
+            tk_notifications.show_error("取得失敗", str(handle.exception), parent=self.master)
+
+        self.scrape_button.config(state=tk.NORMAL)
+        maximum = self.progress_bar["maximum"]
+        tk_async_tasks._perform_gui_update(
+            self.progress_label, self.progress_bar, maximum, maximum, "コメント取得処理終了"
+        )
 
 
     def _open_json_file(self):
