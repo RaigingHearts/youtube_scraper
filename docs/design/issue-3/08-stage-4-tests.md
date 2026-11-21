@@ -4,7 +4,7 @@
 ワーカー不在時は即時終了。実行中は終了確認を一度だけ表示する。running、confirming、shutdown_pending、stopping、complete、closedの各状態と許可される遷移を確認する。終了確認の重複要求でダイアログや完了処理が重複しないことを確認する。
 
 - キャンセル選択でshutdown_pendingを解除し、判断Eventを設定し、cancel_eventを設定せず通常処理へ戻る。
-- はい・いいえでは保存方針を確定してからcancel_eventを設定する。
+- はい・いいえでは保存方針を確定し、cancel_reason=application_shutdownを未設定時に先に確定してからcancel_eventを設定する。未回答確認要求のFalse解除にもresponse_reason=application_shutdownを付ける。
 - 終了確認中もTkイベントループとワーカー監視が継続する。
 
 ## 2. 保存判断バリアと競合
@@ -36,7 +36,7 @@
 キャンセル後のresult_data保持、既存返却タプル、fetch_status="cancelled"との整合性を確認する。継続確認による中止はresult_data["cancel_reason"]="continuation_declined"、アプリ終了はresult_data["cancel_reason"]="application_shutdown"となることを確認する。キャンセル以外ではcancel_reasonキーが存在しないこと、既存のcancel_reasonキーなしデータとの互換性を確認する。
 
 ## 8. 確認要求解除
-未回答要求をFalseで解除しEventを必ず設定する。遅延回答で確定済みFalseが上書きされず、回答と終了解除が競合しても一度だけ確定することを確認する。終了中に新しい確認ダイアログを表示しない。
+未回答要求をFalseで解除しEventを必ず設定する。遅延回答で確定済みFalseまたはresponse_reasonが上書きされず、回答と終了解除が競合しても一度だけ確定することを確認する。利用者のFalse回答が先ならcontinuation_declined、終了解除が先ならapplication_shutdownとなり、WorkerHandle.cancel_reasonとresult_data["cancel_reason"]が一致することを確認する。True回答確定後に終了要求が発生した場合はapplication_shutdownが設定されることも確認する。ダイアログ例外・表示不能によるFalseはconfirmation_unavailableとなることを確認する。終了中に新しい確認ダイアログを表示しない。
 
 ## 9. 終了中の通知
 終了中に個別の通知ダイアログを表示せず、通知をFIFOで退避することを確認する。ワーカー終了後、通知内容・種類・順序が一つのサマリーに保持され、警告・エラーが破棄されないこと、通知がない場合にサマリーを表示しないことを確認する。

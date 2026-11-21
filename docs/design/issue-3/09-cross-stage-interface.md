@@ -13,10 +13,10 @@ WorkerHandleは一つのワーカー実行のライフサイクルを管理す�
 - exception：未処理例外
 - partial_result：処理途中で確定した保存結果を保持する構造化データ。少なくともsaved_filesの空リストを持つ
 - progress_lock、latest_progress、progress_marker_queued：進捗集約
-- confirmation_lockおよびpending_confirmations：未回答確認要求
+- confirmation_lockおよびpending_confirmations：未回答確認要求。各要求はresponse_reasonを持つ
 - shutdown_lock、shutdown_decision_event、shutdown_pending：終了判断バリア
 - save_policy、save_started：終了時保存方針と保存開始状態
-- cancel_reason：キャンセル原因の補足情報
+- cancel_reason：最初に確定したキャンセル原因の補足情報。confirmation_lockで保護し、後から上書きしない
 
 Eventは初期状態unset、フラグはFalse、result/exception/latest_progressは未設定状態から開始する。partial_resultは保存処理開始前に初期化し、main.pyはdone_event後に読み取る。実装上のデータ型はPython 3.8.10で扱える標準型とし、新規外部依存を追加しない。
 
@@ -24,7 +24,7 @@ Eventは初期状態unset、フラグはFalse、result/exception/latest_progress
 GuiRequestはkind、payload、request_idを持ち、payloadにTkinterオブジェクトを含めない。request_idはWorkerHandle内で一意とし、要求と応答の対応付けに用いる。
 - progress：payloadは空または進捗対象の識別情報。進捗値本体はWorkerHandle.latest_progressに保持する。
 - notification：payloadはkind(info/warning/error)、title、messageを持つ。
-- confirmation：payloadはmessageを持ち、要求本体はresponse_event、response、answeredを保持する。response_eventは要求ごとに独立する。
+- confirmation：payloadはmessageを持ち、要求本体はresponse_event、response、answered、response_reasonを保持する。response_eventは要求ごとに独立する。response_reasonはuser_response、application_shutdown、confirmation_unavailable等、Falseが確定した経路を識別する。
 
 未知のkindはログへ記録し、その要求だけを失敗扱いとして後続要求の処理を継続する。
 
@@ -42,13 +42,14 @@ publish_progress()はprogress_lock内でlatest_progressを置換する。progres
 終了処理開始後は個別の通知ダイアログを表示せず、通知要求をFIFOで退避する。ワーカー終了後、種類・本文・発生順を保った一つの終了時サマリーとして報告する。情報・警告・エラーのいずれも黙って破棄しない。通知がない場合はサマリーを表示しない。
 
 ## 7. 継続確認契約
-メインスレッドが回答値を確定してからresponse_eventを設定する。回答確定と終了時解除はconfirmation_lock等で排他的に行い、answered=Trueの要求を上書きしない。終了確定時に未回答要求をFalseで解除してEventを必ず設定する。遅延したダイアログ応答はanswered=Trueなら破棄する。確認・通知・終了確認のモーダルダイアログは直列化する。
+メインスレッドが回答値とresponse_reasonを確定してからresponse_eventを設定する。回答確定と終了時解除はconfirmation_lockで排他的に行い、answered=Trueの要求を上書きしない。利用者が明示的にFalseを選んだ場合、WorkerHandle.cancel_reasonが未設定ならcontinuation_declinedを同じLock内で設定する。終了確定時はcancel_reasonが未設定ならapplication_shutdownを先に設定し、未回答要求をFalse（response_reason=application_shutdown）で解除してEventを必ず設定する。ダイアログ例外・表示不能によるFalseはconfirmation_unavailableとする。遅延したダイアログ応答はanswered=Trueなら破棄する。True回答確定後に終了が始まった場合もapplication_shutdownを設定してcancel_eventで停止する。cancel_reasonは最初に確定した原因を保持し、後から上書きしない。確認・通知・終了確認のモーダルダイアログは直列化する。
 
 ## 8. APIクライアント契約
 youtube_api_client.pyはtkinterおよびtk_notificationsに依存しない。APIエラーのログとresult_data内のエラー情報を維持し、利用者向け通知はワーカーがnotification要求として登録する。
-fetch_all_comments()の返却タプルは(result_data, fetched_count, total_expected)を維持する。既存fetch_statusの意味を維持し、キャンセルはfetch_status="cancelled"を使用する。キャンセル理由が判別可能な場合、result_data["cancel_reason"]を任意項目として付与する。
-- continuation_declined：継続確認で利用者が中止した。
+fetch_all_comments()の返却タプルは(result_data, fetched_count, total_expected)を維持する。既存fetch_statusの意味を維持し、キャンセルはfetch_status="cancelled"を使用する。APIクライアントは確認応答Falseの発生理由を単独で決めず、WorkerHandleにも依存しない。ワーカータスクがAPI処理終了後にWorkerHandle.cancel_reasonをconfirmation_lockで読み、result_data["cancel_reason"]へ反映する。
+- continuation_declined：利用者が明示的に継続確認を拒否。
 - application_shutdown：アプリ終了に伴う協調的キャンセル。
+- confirmation_unavailable：確認ダイアログの例外・表示不能による中止。
 cancel_reasonは補足情報であり、既存のfetch_statusや返却タプルを置き換えない。キャンセル以外の結果ではcancel_reasonキーを追加しない。既存のキーなしデータも有効な入力として扱う。
 
 ## 9. 取得タスクの結果契約
@@ -67,7 +68,7 @@ saved_filesの各要素はkind、path、successを持ち、失敗時はerror等�
 終了確認ダイアログを表示する前にmain.pyはshutdown_lock内でshutdown_pending=Trueとし、shutdown_decision_eventを未設定にする。ワーカーは保存開始直前に同じLockを取得する。
 - pending=Trueならロックを解放してshutdown_decision_eventを待つ。Lockを保持したままEvent待機してはならない。
 - pending=Falseかつ通常保存が必要なら、同じLock内でsave_started=Trueとして保存開始を確定する。
-- 選択確定後、main.pyはsave_policyを設定し、pending=FalseにしてEventを設定する。キャンセル選択ではcancel_eventを設定しない。はい／いいえではcancel_eventを設定する。
+- 選択確定後、main.pyはsave_policyを設定し、pending=FalseにしてEventを設定する。キャンセル選択ではcancel_eventを設定しない。はい／いいえではconfirmation_lockでcancel_reasonが未設定ならapplication_shutdownを確定し、未回答確認要求をFalse（response_reason=application_shutdown）で解除してからcancel_eventを設定する。
 - save_policy=save_partialなら取得済みデータの保存を許可する。
 - save_policy=skip_additional_saveならまだ開始していない保存を開始しない。
 - 保存開始済みの場合は選択で強制中断しない。
