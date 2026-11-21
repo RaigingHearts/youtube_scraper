@@ -6,7 +6,7 @@ GuiRequest、WorkerHandle、run_task_in_thread()、main.pyのGUI要求ポーリ�
 ## 2. 単体テスト
 - GuiRequestがkind、payload、request_id、必要なresponse_event・response・answeredを保持する。
 - 要求ごとのpayload/Eventが独立し、Tkinterオブジェクトを含まない。
-- WorkerHandleのEvent初期状態、result、exception、各Lock・フラグの初期状態を確認する。
+- WorkerHandleのEvent初期状態、result、exception、partial_result（saved_filesの空リストを含む）、各Lock・フラグの初期状態を確認する。
 - 正常・例外終了の両方でdone_eventが設定される。
 - ワーカーが呼び出し元と異なるスレッドで実行される。
 - 位置引数・キーワード引数・WorkerHandleの受け渡しを確認する。

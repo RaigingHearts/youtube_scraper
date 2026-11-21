@@ -14,7 +14,7 @@ GuiRequest、WorkerHandle、ワーカー生成・実行管理を定義する。�
 共通属性はkind、payload、request_idとする。kindはprogress、notification、confirmation。confirmationではresponse_event、response、answeredを追加で保持する。payloadにTkinterウィジェット、Tk変数、rootを含めない。各種payloadの具体的なキーは09-cross-stage-interface.mdに従う。
 
 ## 4. WorkerHandle
-基本属性はthread、gui_request_queue、cancel_event、done_event、result、exception。追加属性は最新進捗情報、進捗Lock、進捗マーカー登録済みフラグ、確認要求管理、終了判断用Lock/Event、終了判断待ちフラグ、保存方針、保存開始状態、cancel_reasonを含む。実装上の属性名・初期値は共通インターフェース仕様書を正とする。
+基本属性はthread、gui_request_queue、cancel_event、done_event、result、exception。追加属性は最新進捗情報、進捗Lock、進捗マーカー登録済みフラグ、確認要求管理、終了判断用Lock/Event、終了判断待ちフラグ、保存方針、保存開始状態、保存途中結果partial_result、cancel_reasonを含む。partial_resultは保存処理開始前に初期化し、少なくともsaved_filesの空リストを持つ。実装上の属性名・初期値は共通インターフェース仕様書を正とする。
 
 ## 5. 起動関数
 run_task_in_thread(task_function, gui_request_queue, *args, **kwargs) -> WorkerHandleを用意する。ワーカー関数にはWorkerHandleを第1引数として渡す。ラッパーは戻り値をresultへ格納し、例外をexceptionへ格納してログに記録し、成功・失敗のどちらでもfinallyでdone_eventを設定する。thread参照とWorkerHandleを呼び出し元が保持できる状態にしてから開始する。Thread.start()失敗は握りつぶさず呼び出し元へ伝え、done_eventを設定し、main.pyがGUI状態を復旧できるようにする。起動失敗時に通常のワーカー完了処理と混同しない。
