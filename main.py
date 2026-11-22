@@ -810,6 +810,10 @@ class YouTubeCommentScraperApp:
         """ワーカー結果・部分保存結果をメインスレッドで回収し、GUI状態を復旧する。"""
         if self.worker_handle is not handle or not handle.done_event.is_set():
             return
+        if handle.thread is not None:
+            handle.thread.join(timeout=0)
+            if handle.thread.is_alive():
+                return
         if (
             not self.gui_request_queue.empty()
             or self._dialog_active
