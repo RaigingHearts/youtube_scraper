@@ -101,7 +101,7 @@ Stage 1は共通基盤の導入段階であり、既存の取得処理すべて�
 
 - progress：現在のWorkerHandleから最新進捗を取得し、GUI側更新処理へ渡す。
 - notification：info／warning／errorを種類に応じて振り分ける。
-- confirmation：Stage 1では実ダイアログを表示せず、未対応要求をFalseで解除し、Event待機を残さない。
+- confirmation：Stage 1単独時点の仮実装では実ダイアログを表示せず、未対応要求をFalseで解除する。これはStage 1途中段階の動作記録であり、全Stage統合後に実行するIssue #20の最終テストで期待する動作ではない。最終状態の確認ダイアログ、Event応答、False中止、表示例外、終了時解除はStage 3テスト仕様 §1・§2・§7で検証し、本項では仮実装のFalse解除を合否判定しない。
 - 未知のkind：警告ログを記録し、その要求のみを処理対象外とする。
 
 ## 6. ワーカーライフサイクル・GUI復旧
