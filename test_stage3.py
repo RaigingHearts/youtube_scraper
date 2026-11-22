@@ -637,5 +637,84 @@ class ScrapeTaskConfirmationHandoffTests(Stage3AppTestCase):
         self.assertEqual(notices[0].payload["title"], "取得中断")
 
 
+    def run_task_with_forced_cancel(self, cancel_reason):
+        app = self.make_app()
+        handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        app.worker_handle = handle
+        callback_result = []
+        callback_request = []
+
+        def fake_fetch(api_key, video_id, progress_callback=None,
+                       confirm_callback=None, cancel_event=None):
+            def ask_from_worker():
+                callback_result.append(confirm_callback("continue?"))
+
+            thread = threading.Thread(target=ask_from_worker)
+            thread.start()
+            request = app.gui_request_queue.get(timeout=2)
+            callback_request.append(request)
+
+            if cancel_reason == "application_shutdown":
+                handle.cancel_for_shutdown()
+                with patch.object(main.messagebox, "askyesno") as askyesno:
+                    app._handle_gui_request(request)
+                askyesno.assert_not_called()
+            elif cancel_reason == "confirmation_unavailable":
+                with self.assertLogs(main.logger, level="ERROR"):
+                    with patch.object(
+                        main.messagebox, "askyesno",
+                        side_effect=RuntimeError("dialog unavailable"),
+                    ):
+                        app._handle_gui_request(request)
+            else:
+                self.fail("unsupported forced cancel reason")
+
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+            return {
+                "fetch_status": "cancelled",
+                "errors": [],
+                "notifications": [],
+                "video_info_raw_response": {},
+                "channel_info_raw_response": {},
+                "comment_threads_raw_responses": [],
+                "comment_replies_raw_responses": [],
+            }, 0, 0
+
+        with patch.object(
+            main.youtube_api_client, "fetch_all_comments",
+            side_effect=fake_fetch,
+        ):
+            result = app._scrape_comments_task(handle, "video-id")
+
+        return app, handle, result, callback_result, callback_request
+
+    def test_application_shutdown_reason_is_forwarded_into_cancelled_task_result(self):
+        app, handle, result, callback_result, requests = (
+            self.run_task_with_forced_cancel("application_shutdown")
+        )
+
+        self.assertEqual(callback_result, [False])
+        self.assertEqual(requests[0].response_reason, "application_shutdown")
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+        self.assertEqual(result["fetch_result"]["fetch_status"], "cancelled")
+        self.assertEqual(
+            result["fetch_result"]["cancel_reason"], "application_shutdown"
+        )
+
+    def test_confirmation_unavailable_reason_is_forwarded_into_cancelled_task_result(self):
+        app, handle, result, callback_result, requests = (
+            self.run_task_with_forced_cancel("confirmation_unavailable")
+        )
+
+        self.assertEqual(callback_result, [False])
+        self.assertEqual(requests[0].response_reason, "confirmation_unavailable")
+        self.assertEqual(handle.cancel_reason, "confirmation_unavailable")
+        self.assertEqual(result["fetch_result"]["fetch_status"], "cancelled")
+        self.assertEqual(
+            result["fetch_result"]["cancel_reason"], "confirmation_unavailable"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
