@@ -25,6 +25,18 @@ class GuiRequestTests(unittest.TestCase):
 
         self.assertEqual(second.payload, {})
 
+    def test_explicit_request_fields_are_preserved(self):
+        payload = {"message": "hello"}
+        request = tk_async_tasks.GuiRequest(
+            kind="notification",
+            payload=payload,
+            request_id="request-123",
+        )
+
+        self.assertEqual(request.kind, "notification")
+        self.assertIs(request.payload, payload)
+        self.assertEqual(request.request_id, "request-123")
+
     def test_confirmation_requests_have_independent_events(self):
         first = tk_async_tasks.GuiRequest(kind="confirmation")
         second = tk_async_tasks.GuiRequest(kind="confirmation")
@@ -60,7 +72,9 @@ class WorkerHandleTests(unittest.TestCase):
         self.assertEqual(handle.pending_confirmations, {})
         self.assertFalse(handle.progress_marker_queued)
         self.assertFalse(handle.shutdown_pending)
+        self.assertIsNone(handle.save_policy)
         self.assertFalse(handle.save_started)
+        self.assertFalse(handle.exception_notification_queued)
 
     def test_synchronization_objects_and_mutable_state_are_not_shared(self):
         first = tk_async_tasks.WorkerHandle(gui_request_queue=queue.Queue())
@@ -209,6 +223,13 @@ class RunTaskInThreadTests(unittest.TestCase):
         with patch.object(tk_async_tasks.threading, "Thread") as thread_class:
             with self.assertRaises(TypeError):
                 tk_async_tasks.run_task_in_thread(lambda _handle: None, object())
+
+        thread_class.assert_not_called()
+
+    def test_legacy_tk_misc_argument_is_rejected_before_thread_creation(self):
+        with patch.object(tk_async_tasks.threading, "Thread") as thread_class:
+            with self.assertRaises(TypeError):
+                tk_async_tasks.run_task_in_thread(lambda _handle: None, tk_async_tasks.tk.Misc)
 
         thread_class.assert_not_called()
 
