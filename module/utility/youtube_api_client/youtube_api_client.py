@@ -20,8 +20,11 @@ YOUTUBE_API_VERSION = "v3"
 COMMENT_FETCH_THRESHOLD = 100
 
 
-def get_youtube_service(api_key: str) -> Any:
-    """YouTube Data APIサービスオブジェクトを構築して返す。"""
+def get_youtube_service(
+    api_key: str,
+    error_callback: Optional[Callable[[str], None]] = None,
+) -> Any:
+    """YouTube Data APIサービスを構築し、失敗時は秘匿化した概要を任意のcallbackへ渡す。"""
     try:
         service = build(YOUTUBE_API_SERVICE_NAME,
                         YOUTUBE_API_VERSION, developerKey=api_key)
@@ -30,6 +33,8 @@ def get_youtube_service(api_key: str) -> Any:
     except Exception as e:
         error_summary = _safe_exception_summary(e)
         logger.error("YouTube APIサービス構築エラー: %s", error_summary)
+        if error_callback is not None:
+            error_callback(error_summary)
         return None
 
 
@@ -107,7 +112,10 @@ def fetch_all_comments(
         "notifications": []
     }
     result_data = empty_result
-    service = get_youtube_service(api_key)
+    service_error_summaries = []
+    service = get_youtube_service(
+        api_key, error_callback=service_error_summaries.append
+    )
     if not service:
         message = "YouTube APIサービスが利用できないため、コメント取得を中止しました。"
         result_data["errors"].append({"stage": "service", "message": message})
@@ -117,7 +125,11 @@ def fetch_all_comments(
             "title": "APIエラー",
             "message": (
                 "YouTube APIサービスを構築できませんでした。\n"
-                "APIキーが正しいか確認してください。"
+                "APIキーが正しいか確認してください。\n"
+                "エラー概要: {}".format(
+                    service_error_summaries[0]
+                    if service_error_summaries else "詳細不明"
+                )
             ),
         })
         logger.error(message)
