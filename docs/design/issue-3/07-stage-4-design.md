@@ -73,3 +73,13 @@ Stage 4でワーカーを非daemonへ変更する。現行build()/execute()に�
 
 ## 12. 完了条件
 協調的キャンセル、返却済みデータの保持、保存判断バリア、保存方針、ファイル単位の保存結果と予期しない例外時の部分結果保持、確認要求の一度限りの解除、終了通知の集約、自然終了との競合、未処理GUI要求回収、root破棄順序、非daemonワーカーが安全に動作すること。
+
+## 13. 実装反映状況（2026-11-22）
+
+Stage 4のアプリケーション実装をブランチ `feature/issue-3-stage-1-gui-request-foundation` に反映した。
+
+- `main.py`：WM_DELETE_WINDOWから終了制御を開始し、実行中は三択の終了確認を表示する。保存開始バリア、終了中通知のFIFO退避・サマリー表示、自然終了との競合、ワーカー実終了確認、root破棄順序を統合した。
+- `module/utility/tk_async_tasks/tk_async_tasks.py`：保存判断バリアと終了判断確定メソッドを追加。終了確定時はキャンセル信号・未回答確認要求の解除を確定してから保存待機Eventを解除する。ワーカーを非daemon化し、done_event確定をshutdown_lockで同期する。
+- `module/utility/youtube_api_client/youtube_api_client.py`：任意のcancel_eventを受け取り、APIリクエスト前後・ページ処理境界で協調的キャンセルを確認する。ページ間待機をcancel_event.wait(0.1)へ変更し、取得済みレスポンスを保持して後続要求を停止する。既存3要素タプルとfetch_statusを維持する。
+
+静的なソース・仕様照合は実施したが、Stage 4専用新規テスト、既存回帰テスト、実Tkイベントループを使ったGUI統合テスト、実デスクトップ受入確認は未実施。テストコード実装・実行はIssue #20へ引き継ぐ。API execute()にタイムアウトは追加していないため、通信が戻らない場合は終了待機が続くという設計上の制約を維持する。
