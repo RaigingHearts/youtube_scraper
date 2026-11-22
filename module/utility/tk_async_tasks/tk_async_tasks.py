@@ -110,7 +110,7 @@ class WorkerHandle:
                 self.pending_confirmations.pop(request.request_id, None)
 
     def cancel_for_shutdown(self) -> None:
-        """終了によるキャンセルを確定し、未回答確認要求をFalseで解除する。"""
+        """終了によるキャンセルを確定し、表示開始前の未回答確認要求をFalseで解除する。"""
         with self.confirmation_lock:
             if self.cancel_reason is None:
                 self.cancel_reason = "application_shutdown"
