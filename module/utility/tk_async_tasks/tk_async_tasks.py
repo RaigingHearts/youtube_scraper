@@ -11,8 +11,8 @@ Tkinterアプリケーション特化 / モジュールタイプ：ユーティ�
 │   └── "def run_task_in_thread(master_root, task_function, *args, **kwargs):"
 ├── "GUIのプログレスバーとラベルを更新する（スレッドセーフな実処理）"
 │   └── "def update_progress_gui(master_root, progress_label, progress_bar, current_comments, total_comments):"
-├── "ユーザーに続行を確認するダイアログを表示する（スレッドセーフ）"
-│   └── "def confirm_continuation_gui(master_root, message):"
+├── "WorkerHandleが確認要求を登録し、要求固有のEventで応答を待つ"
+│   └── "def WorkerHandle.request_confirmation(message):"
 コピペ編集用罫線 '━┃┏┓┛┗┣┳┫┻╋' '─│┌┐┘└├┬┤┴┼'
 """
 # tk_async_tasks.py # コピーペースト作業での識別用。除去しないこと
@@ -95,7 +95,11 @@ class WorkerHandle:
             if self.cancel_event.is_set():
                 return False
             self.pending_confirmations[request.request_id] = request
-            self.gui_request_queue.put(request)
+            try:
+                self.gui_request_queue.put(request)
+            except BaseException:
+                self.pending_confirmations.pop(request.request_id, None)
+                raise
         try:
             request.response_event.wait()
             return bool(request.response)
@@ -122,34 +126,19 @@ def run_task_in_thread(task_function: Callable, gui_request_queue, *args, **kwar
     """
     ワーカーを起動し、実行状態・結果・例外を保持するWorkerHandleを返す。
 
-    新方式:
-        run_task_in_thread(task_function, gui_request_queue, *args, **kwargs)
-        task_functionにはWorkerHandleを第1引数として渡す。
-
-    旧方式:
-        run_task_in_thread(master_root, task_function, *args, **kwargs)
-        移行期間中の既存呼び出しではWorkerHandleをタスクへ渡さず、従来どおり実行する。
+    run_task_in_thread(task_function, gui_request_queue, *args, **kwargs)
+    task_functionにはWorkerHandleを第1引数として渡す。
     """
-    legacy_call = isinstance(task_function, tk.Misc)
-    if legacy_call:
-        legacy_task_function = gui_request_queue
-        request_queue = queue.Queue()
-        actual_task_function = legacy_task_function
-    else:
-        if not isinstance(gui_request_queue, queue.Queue):
-            raise TypeError("gui_request_queue must be an instance of queue.Queue")
-        request_queue = gui_request_queue
-        actual_task_function = task_function
+    if not isinstance(gui_request_queue, queue.Queue):
+        raise TypeError("gui_request_queue must be an instance of queue.Queue")
 
+    actual_task_function = task_function
     task_name = getattr(actual_task_function, "__name__", repr(actual_task_function))
-    handle = WorkerHandle(gui_request_queue=request_queue)
+    handle = WorkerHandle(gui_request_queue=gui_request_queue)
 
     def worker_wrapper():
         try:
-            if legacy_call:
-                handle.result = actual_task_function(*args, **kwargs)
-            else:
-                handle.result = actual_task_function(handle, *args, **kwargs)
+            handle.result = actual_task_function(handle, *args, **kwargs)
         except BaseException as exc:
             handle.exception = exc
             logger.exception("ワーカー '%s' の実行中に例外が発生しました。", task_name)
@@ -216,72 +205,3 @@ def _perform_gui_update(progress_label: ttk.Label, progress_bar: ttk.Progressbar
         progress_label.config(text="準備完了")
 
 
-# コピペ用メソッドコードの例 (使用例として)
-"""
-# モジュールのインポート設定
-import tk_async_tasks
-import logger_config
-import tkinter as tk
-from tkinter import ttk, messagebox
-
-class YourApplication:
-    def __init__(self, master):
-        self.master = master
-        # 進捗表示用のウィジェットを準備
-        self.progress_label = ttk.Label(master, text="準備完了")
-        self.progress_label.pack()
-        self.progress_bar = ttk.Progressbar(master, orient="horizontal", length=200, mode="determinate")
-        self.progress_bar.pack()
-        
-        ttk.Button(master, text="タスク開始", command=self._start_my_task).pack()
-
-    def _start_my_task(self):
-        # GUIを初期状態に戻す
-        tk_async_tasks.update_progress_gui(self.master, self.progress_label, self.progress_bar, 0, 0, "タスク開始中...")
-        
-        # 時間のかかるタスクを別スレッドで実行
-        tk_async_tasks.run_task_in_thread(
-            self.master, 
-            self._my_long_running_task, 
-            "arg1", "arg2", 
-            progress_callback=self._on_task_progress,
-            confirm_callback=self._on_task_confirm
-        )
-
-    def _my_long_running_task(self, param1, param2, progress_callback, confirm_callback):
-        # ここに時間のかかる処理を記述
-        logger.info(f"長時間タスク開始: {param1}, {param2}")
-        total_items = 100
-        for i in range(total_items):
-            # 処理の進捗をGUIに通知
-            progress_callback(i + 1, total_items, f"処理中... ({i+1}/{total_items})")
-            
-            # 例: APIクォータ制限に近づいた場合にユーザーに確認
-            if i == 50:
-                if not confirm_callback("50%完了しました。続行しますか？"):
-                    logger.info("ユーザーがタスクを中断しました。")
-                    break
-            
-            # 実際の処理（例: 時間のかかる計算やI/O）
-            import time
-            time.sleep(0.05)
-        
-        logger.info("長時間タスク完了。")
-        # 最終的なGUI更新（完了メッセージなど）
-        tk_async_tasks.update_progress_gui(self.master, self.progress_label, self.progress_bar, total_items, total_items, "タスク完了！")
-
-    def _on_task_progress(self, current, total, message):
-        # _my_long_running_taskから呼び出される進捗更新コールバック
-        tk_async_tasks.update_progress_gui(self.master, self.progress_label, self.progress_bar, current, total, message)
-
-    def _on_task_confirm(self, message):
-        # _my_long_running_taskから呼び出される確認コールバック
-        return tk_async_tasks.confirm_continuation_gui(self.master, message)
-
-# アプリケーション実行部分
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("非同期タスクテスト")
-    app = YourApplication(root)
-    root.mainloop()
-"""
