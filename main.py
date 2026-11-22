@@ -536,16 +536,13 @@ class YouTubeCommentScraperApp:
         finally:
             self._dialog_active = False
 
-        # ダイアログ表示中にワーカーが自然終了していれば、選択を遅れて適用しない。
-        if handle.done_event.is_set():
-            handle.resolve_shutdown_decision(None)
-            self._shutdown_state = "stopping"
-            self._collect_pending_shutdown_requests()
-            self._schedule_gui_request_polling()
-            return
-
         if choice is None:
-            handle.resolve_shutdown_decision(None)
+            worker_still_running = handle.resolve_shutdown_decision(None)
+            if not worker_still_running:
+                self._shutdown_state = "stopping"
+                self._collect_pending_shutdown_requests()
+                self._schedule_gui_request_polling()
+                return
             self._shutdown_state = "running"
             self._shutdown_requested = False
             self._drain_pending_modal_requests()
@@ -556,9 +553,10 @@ class YouTubeCommentScraperApp:
             None if decision_state == "save_started"
             else ("save_partial" if choice else "skip_additional_save")
         )
-        handle.resolve_shutdown_decision(save_policy)
+        worker_still_running = handle.resolve_shutdown_decision(save_policy)
         self._shutdown_state = "stopping"
-        handle.cancel_for_shutdown()
+        if worker_still_running:
+            handle.cancel_for_shutdown()
         self._collect_pending_shutdown_requests()
         self._schedule_gui_request_polling()
 
