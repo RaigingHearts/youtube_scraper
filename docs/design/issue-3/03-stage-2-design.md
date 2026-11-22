@@ -28,7 +28,7 @@ Stage 2では、継続確認に用いる既存のconfirm_continuation_gui()／Bo
 ## 6. APIクライアント（Stage 2の移行例外）
 Stage 2では、youtube_api_client.py内部のtk_notifications呼び出しはまだ残存し得る。これは現行APIクライアントのGUI依存をStage 3で解消するための、Stage 2に限った明示的な移行例外である。したがってStage 2の「ワーカーからGUIへの直接アクセスを行わない」という完了条件・テスト対象は、main.pyおよび_scrape_comments_task()自身が行うGUI操作・通知経路に適用する。APIクライアント内部から発生する既存の直接通知はStage 2では例外として扱い、Stage 3で完全に撤去する。Stage 2で新たな直接GUI操作や通知経路を追加してはならない。
 
-### 6.1 保存結果レコードの共通形式
+## 7. 保存結果レコードの共通形式
 保存結果はファイル単位で記録し、`kind`は次の固定値を使用する。
 - `video_info`
 - `channel_info`
@@ -37,5 +37,5 @@ Stage 2では、youtube_api_client.py内部のtk_notifications呼び出しはま
 
 各レコードは`{kind, path, success}`を必須項目とし、`path`は保存先の完全なパス、`success`は保存処理の実成否を表す真偽値とする。失敗時は必要に応じて`error`等の補足情報を持たせる。ファイルの保存試行が確定した直後に`WorkerHandle.partial_result["saved_files"]`へ追加し、正常終了時の戻り値`saved_files`と同じ内容にする。未試行ファイルのレコードは追加しない。
 
-## 7. 完了条件
+## 8. 完了条件
 main.py由来の進捗・通知表示がメインスレッドで行われ、進捗が集約され、ワーカー側の_scrape_comments_task()がGUI所有状態を直接変更せず、結果・保存情報が戻り値およびpartial_resultで受け渡され、既存の取得・保存動作が維持されること。main.py自身によるGUI更新はメインスレッド上で行うため、GUI操作そのものを撤去対象とはしない。Stage 2ではAPIクライアント由来の既存tk_notifications呼び出しと既存の継続確認GUI経路のみを移行例外として許容し、これらの撤去はStage 3の完了条件とする。終了時の通知抑制・集約はStage 4で扱う。
