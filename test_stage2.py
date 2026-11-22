@@ -2,6 +2,7 @@
 
 import ast
 import inspect
+import os
 import queue
 import threading
 import tkinter as tk
@@ -234,7 +235,7 @@ class ScrapeTaskSaveResultTests(unittest.TestCase):
             all(record["path"].endswith(".json") for record in result["saved_files"])
         )
         self.assertTrue(
-            all(__import__("os").path.isabs(record["path"]) for record in result["saved_files"])
+            all(os.path.isabs(record["path"]) for record in result["saved_files"])
         )
         self.assertEqual(save_file.call_count, 4)
         self.assertEqual(
