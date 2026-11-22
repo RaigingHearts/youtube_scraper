@@ -372,14 +372,6 @@ class YouTubeCommentScraperApp:
                 + saved_summary
                 + failure_summary,
             )
-        elif fetch_status == "complete":
-            notification = (
-                "info",
-                "取得完了",
-                "コメントの取得処理が完了しました。\n"
-                + saved_summary
-                + failure_summary,
-            )
         elif fetch_status == "partial":
             notification = (
                 "warning",
@@ -390,9 +382,17 @@ class YouTubeCommentScraperApp:
             )
         elif failed_records:
             notification = (
-                "error",
-                "ファイル保存失敗",
-                "一部またはすべてのファイルを保存できませんでした。\n"
+                "warning",
+                "ファイル保存に一部失敗",
+                "取得処理は終了しましたが、ファイルの保存に失敗しました。\n"
+                + saved_summary
+                + failure_summary,
+            )
+        elif fetch_status == "complete":
+            notification = (
+                "info",
+                "取得完了",
+                "コメントの取得処理が完了しました。\n"
                 + saved_summary
                 + failure_summary,
             )
