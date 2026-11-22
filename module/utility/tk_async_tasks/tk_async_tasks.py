@@ -120,14 +120,19 @@ class WorkerHandle:
             self.shutdown_decision_event.clear()
             return "pending"
 
-    def resolve_shutdown_decision(self, save_policy: Optional[str]) -> None:
-        """終了判断を確定し、保存判断バリアで待つワーカーを解放する。"""
+    def resolve_shutdown_decision(self, save_policy: Optional[str]) -> bool:
+        """終了判断を確定し、ワーカーが未終了なら保存判断バリアを解放する。"""
         if save_policy not in (None, "save_partial", "skip_additional_save"):
             raise ValueError("unsupported save_policy: {}".format(save_policy))
         with self.shutdown_lock:
+            if self.done_event.is_set():
+                self.shutdown_pending = False
+                self.shutdown_decision_event.set()
+                return False
             self.save_policy = save_policy
             self.shutdown_pending = False
             self.shutdown_decision_event.set()
+            return True
 
     def begin_save(self) -> bool:
         """保存開始を終了判断と排他的に確定する。Falseなら追加保存を行わない。"""
@@ -183,7 +188,8 @@ def run_task_in_thread(task_function: Callable, gui_request_queue, *args, **kwar
             handle.exception = exc
             logger.exception("ワーカー '%s' の実行中に例外が発生しました。", task_name)
         finally:
-            handle.done_event.set()
+            with handle.shutdown_lock:
+                handle.done_event.set()
             logger.info("ワーカー '%s' が終了しました。", task_name)
 
     thread = threading.Thread(target=worker_wrapper, name="youtube-scraper-worker")
