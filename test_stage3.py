@@ -168,6 +168,16 @@ class ConfirmationRequestLifecycleTests(Stage3AppTestCase):
         self.assertEqual(handle.cancel_reason, "continuation_declined")
         self.assertEqual(handle.pending_confirmations, {})
 
+    def test_queue_insertion_failure_removes_pending_confirmation(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        with patch.object(
+            handle.gui_request_queue, "put",
+            side_effect=RuntimeError("queue unavailable"),
+        ):
+            with self.assertRaises(RuntimeError):
+                handle.request_confirmation("continue?")
+        self.assertEqual(handle.pending_confirmations, {})
+
     def test_shutdown_before_display_resolves_unanswered_request_without_dialog(self):
         app = self.make_app()
         handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
@@ -539,6 +549,77 @@ class ScrapeTaskConfirmationHandoffTests(Stage3AppTestCase):
         self.assertEqual(len(notices), 1)
         self.assertEqual(notices[0].kind, "notification")
         self.assertEqual(notices[0].payload["title"], "取得完了")
+
+    def test_api_notification_is_forwarded_once_without_replaying_error_records(self):
+        app = self.make_app()
+        handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        app.worker_handle = handle
+        api_notice = {
+            "stage": "comment_threads",
+            "kind": "error",
+            "title": "APIエラー",
+            "message": "comment thread failed",
+        }
+        result_data = {
+            "fetch_status": "partial",
+            "errors": [{
+                "stage": "comment_threads",
+                "message": "comment thread failed",
+            }],
+            "notifications": [api_notice],
+            "video_info_raw_response": {},
+            "channel_info_raw_response": {},
+            "comment_threads_raw_responses": [],
+            "comment_replies_raw_responses": [],
+        }
+        with patch.object(
+            main.youtube_api_client, "fetch_all_comments",
+            return_value=(result_data, 0, 0),
+        ):
+            app._scrape_comments_task(handle, "video-id")
+
+        requests = list(app.gui_request_queue.queue)
+        matching = [
+            request for request in requests
+            if request.payload.get("message") == "comment thread failed"
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0].payload, {
+            "kind": "error",
+            "title": "APIエラー",
+            "message": "comment thread failed",
+        })
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[1].payload["title"], "部分取得")
+
+    def test_comments_disabled_status_creates_one_task_warning_when_api_has_no_notice(self):
+        app = self.make_app()
+        handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        app.worker_handle = handle
+        result_data = {
+            "fetch_status": "comments_disabled",
+            "errors": [{
+                "stage": "comment_threads",
+                "reason": "commentsDisabled",
+                "message": "comments disabled",
+            }],
+            "notifications": [],
+            "video_info_raw_response": {},
+            "channel_info_raw_response": {},
+            "comment_threads_raw_responses": [],
+            "comment_replies_raw_responses": [],
+        }
+        with patch.object(
+            main.youtube_api_client, "fetch_all_comments",
+            return_value=(result_data, 0, 0),
+        ):
+            app._scrape_comments_task(handle, "video-id")
+
+        requests = list(app.gui_request_queue.queue)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].kind, "notification")
+        self.assertEqual(requests[0].payload["kind"], "warning")
+        self.assertEqual(requests[0].payload["title"], "コメント取得不可")
 
     def test_false_confirmation_is_forwarded_and_cancel_reason_is_preserved(self):
         app, handle, result, callback_result = self.run_task_with_confirmation(
