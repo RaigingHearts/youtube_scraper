@@ -44,3 +44,18 @@ Stage 3の実装では、APIクライアントの通知情報は result_data["no
 - fetch_status、result_data、3要素タプル、取得件数の既存契約とキャンセル理由の伝達。
 
 本書のテスト仕様は期待動作の定義であり、上記テストが実装・実行済みであることを意味しない。テストコードの実装と検証はIssue #20で行う。
+
+
+## 10. Issue #20 Stage 3テスト実装・実行結果（2026-11-23）
+
+実行主体：利用者報告。Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
+
+- `python -m unittest test_stage3 -v`：24 tests、0.145秒、`OK`。
+- `python -m unittest test_main -v`：25 tests、0.768秒、`OK`。
+- `python -m unittest discover -v`：135 tests、2.198秒、`OK`。
+- 対象ブランチ：`feature/issue-20-stage-1-tests`、対象コミット：`562c3f0`。
+- `git diff --check`：エラーなし。origin追跡ブランチと同期し、未追跡ファイル `issue3-comment.md` は維持。
+
+実装したStage 3専用テストは24件。§1～§6のEvent確認、競合、モーダル直列化、APIクライアント境界、通知・継続確認引き渡しを検証した。タスク結果へのキャンセル理由伝達について、`application_shutdown` と `confirmation_unavailable` の2経路を追加し、両方とも `fetch_result["cancel_reason"]` まで保持されることを確認した。
+
+**検証範囲の制限：** 本Stage専用テストはモック・同期プリミティブを用いたコンポーネント／境界テストであり、Stage 3の確認ダイアログ・モーダルFIFOを実Tkイベントループと組み合わせた専用GUI統合テストは未実施である。§7に定める実Tkイベントループを使ったStage 3固有シナリオは、Stage 1・2のGUI統合テスト結果で代替せず、Stage 1～4全体統合検証で実施する。したがって、Stage 3の専用テスト24件は合格だが、Stage 3固有GUI統合検証および実デスクトップ受け入れ確認は未完了として扱う。
