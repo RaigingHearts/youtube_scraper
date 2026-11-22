@@ -538,7 +538,17 @@ class YouTubeCommentScraperApp:
         try:
             if request.kind == "confirmation":
                 handle = self.worker_handle
-                if handle is not None and handle.cancel_event.is_set():
+                if request.answered:
+                    return
+                if handle is None:
+                    self._answer_confirmation(request, False, "confirmation_unavailable")
+                    return
+                with handle.confirmation_lock:
+                    already_answered = request.answered
+                    shutdown_started = handle.cancel_event.is_set()
+                if already_answered:
+                    return
+                if shutdown_started:
                     self._answer_confirmation(request, False, "application_shutdown")
                 else:
                     try:
