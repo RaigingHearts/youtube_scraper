@@ -668,26 +668,23 @@ class YouTubeCommentScraperApp:
             )
             self.comment_count_label.config(text=count_text)
 
+        # 例外通知は上でGUI要求キューへ登録済み。ここでは結果回収とGUI復旧だけを行う。
         try:
-            # 例外通知は上でGUI要求キューへ登録済み。ここでは結果回収とGUI復旧だけを行う。
-            pass
-        finally:
             # 例外終了時もpartial_resultから復元した保存ファイルを利用可能にする。
             self.open_json_button.config(
                 state=tk.NORMAL if valid_saved_paths else tk.DISABLED
             )
             self.scrape_button.config(state=tk.NORMAL)
             maximum = self.progress_bar["maximum"]
-            try:
-                tk_async_tasks._perform_gui_update(
-                    self.progress_label,
-                    self.progress_bar,
-                    maximum,
-                    maximum,
-                    "コメント取得処理終了",
-                )
-            finally:
-                self.worker_handle = None
+            tk_async_tasks._perform_gui_update(
+                self.progress_label,
+                self.progress_bar,
+                maximum,
+                maximum,
+                "コメント取得処理終了",
+            )
+        finally:
+            self.worker_handle = None
 
     def _open_json_file(self):
         """保存されたJSONファイルを開く。"""
