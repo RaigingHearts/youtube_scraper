@@ -91,7 +91,7 @@ APIリクエスト開始前にcancel_eventを確認する。execute()実行中�
 ## 12. 状態遷移
 標準状態はrunning、confirming、shutdown_pending、stopping、complete、closedとする。
 - running -> confirming -> running：継続確認への回答が確定した。
-- running/confirming -> shutdown_pending：終了確認を開始した。確認中の要求は直列化し、未回答要求を解除する。
+- running -> shutdown_pending：終了確認を開始した。継続確認ダイアログ表示中に終了要求が来た場合は、そのダイアログが閉じてから終了確認を開始する。shutdown_pending中の通知・確認要求はFIFOへ退避する。
 - shutdown_pending -> running/confirming：終了キャンセル。元の通常処理へ戻り、cancel_eventを設定しない。
 - shutdown_pending -> stopping：はい／いいえの終了方針を確定し、cancel_eventを設定した。
 - stopping -> complete：ワーカー終了、結果回収、GUI後処理が完了した。
