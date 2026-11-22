@@ -335,11 +335,12 @@ class YouTubeCommentScraperApp:
         if channel_info_raw_response and channel_info_raw_response.get("items"):
             channel_id = channel_info_raw_response["items"][0].get("id")
 
-        if save_allowed and channel_id:
-            channel_info_filename = "channel_info_raw_{}.json".format(channel_id)
-            channel_info_saved = save_file(
-                "channel_info", channel_info_raw_response, channel_info_filename
-            )
+        if channel_id:
+            if save_allowed:
+                channel_info_filename = "channel_info_raw_{}.json".format(channel_id)
+                channel_info_saved = save_file(
+                    "channel_info", channel_info_raw_response, channel_info_filename
+                )
         else:
             logger.warning(
                 "チャンネルIDが不明なため、チャンネル情報Rawデータの保存はスキップされました。"
