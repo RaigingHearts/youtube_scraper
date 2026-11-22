@@ -346,7 +346,7 @@ def fetch_all_comments(
                             f"親コメント '{parent_id}' の返信をすべて取得できませんでした。\n"
                             f"取得済みの返信データは保存対象に残します。\nエラー概要: {error_summary}",
                         )
-                        stop_after_current_thread_page = True
+                        stop_after_current_thread_page = not is_cancelled()
                         break
                     except Exception as e:
                         error_summary = _safe_exception_summary(e)
@@ -357,7 +357,7 @@ def fetch_all_comments(
                             "reply_comments", "error", "返信取得エラー",
                             f"親コメント '{parent_id}' の返信取得中にエラーが発生しました。\nエラー概要: {error_summary}",
                         )
-                        stop_after_current_thread_page = True
+                        stop_after_current_thread_page = not is_cancelled()
                         break
 
                     # APIレスポンスを加工せず、ページ単位でそのまま保存する
