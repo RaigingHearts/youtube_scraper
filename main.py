@@ -504,18 +504,29 @@ class YouTubeCommentScraperApp:
         decision_state = handle.begin_shutdown_decision()
         if decision_state == "complete":
             self._shutdown_state = "stopping"
+            self._collect_pending_shutdown_requests()
             self._schedule_gui_request_polling()
             return
 
         self._shutdown_state = "shutdown_pending"
+        if decision_state == "save_started":
+            shutdown_message = (
+                "保存処理はすでに開始されています。\n"
+                "開始済みの保存は中断できず、はい／いいえの選択では変更されません。\n"
+                "終了する場合ははい／いいえ、処理を続ける場合はキャンセルを選択してください。"
+            )
+        else:
+            shutdown_message = (
+                "コメント取得処理が実行中です。\n"
+                "はい：取得済みデータを保存して終了\n"
+                "いいえ：追加保存を行わず終了\n"
+                "キャンセル：取得処理を続行"
+            )
         self._dialog_active = True
         try:
             choice = messagebox.askyesnocancel(
                 "終了確認",
-                "コメント取得処理が実行中です。\n"
-                "はい：取得済みデータを保存して終了\n"
-                "いいえ：追加保存を行わず終了\n"
-                "キャンセル：取得処理を続行",
+                shutdown_message,
                 parent=self.master,
             )
         except Exception:
@@ -540,7 +551,10 @@ class YouTubeCommentScraperApp:
             self._schedule_gui_request_polling()
             return
 
-        save_policy = "save_partial" if choice else "skip_additional_save"
+        save_policy = (
+            None if decision_state == "save_started"
+            else ("save_partial" if choice else "skip_additional_save")
+        )
         handle.resolve_shutdown_decision(save_policy)
         self._shutdown_state = "stopping"
         handle.cancel_for_shutdown()
@@ -568,6 +582,12 @@ class YouTubeCommentScraperApp:
             return
         if self._dialog_active or self._processing_pending_modal_requests:
             return
+        if self._gui_poll_after_id is not None:
+            try:
+                self.master.after_cancel(self._gui_poll_after_id)
+            except tk.TclError:
+                logger.debug("GUIポーリングの予約は既に解除されています。")
+            self._gui_poll_after_id = None
 
         if self._shutdown_notifications and not self._shutdown_summary_shown:
             self._shutdown_summary_shown = True
