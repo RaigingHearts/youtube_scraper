@@ -45,6 +45,8 @@ Stage 1は共通基盤の導入段階であり、既存の取得処理すべて�
 - `pending_confirmations` が独立した辞書である。
 - `thread` が未設定状態から開始する。
 
+注：統合後の `WorkerHandle` には後続Stageで使用する `shutdown_pending`、`save_policy`、`save_started` 等の状態も存在する。本Stageの初期状態テストでは、これらの初期値と同期オブジェクトの独立性だけを確認し、終了判断・保存調停・キャンセルの振る舞いはStage 3・4の各仕様に従って別途検証する。`exception_notification_queued` はワーカー例外通知の重複登録防止状態であり、初期値Falseを確認する。
+
 ### 3.3 進捗集約プリミティブ
 
 - `publish_progress()` が最新値を置換する。
@@ -114,6 +116,8 @@ Stage 1は共通基盤の導入段階であり、既存の取得処理すべて�
 - 完了後に次のワーカーを起動できる。
 - 起動失敗後に内部参照が残らず、次の起動を妨げない。
 
+注：`test_main.py` の `test_finish_worker_restores_widgets_and_saved_file_paths` および `test_finish_worker_keeps_json_button_disabled_without_saved_files` には、Stage 2テスト仕様 §6・§7が定める取得結果・保存結果のGUI反映に関する追加の回帰確認が含まれる。これらは統合済み実装の補助的なクロスStage確認として保持するが、その結果をStage 1の合否条件には含めず、Stage 2新規テスト群の実装・検証完了とも扱わない。
+
 ## 7. GUI統合テスト
 
 Tkイベントループを使用し、YouTube API通信とファイル保存はモック化する。
@@ -142,7 +146,7 @@ GUI不要の単体テストと実Tkイベントループを使う統合テスト
 
 - 既存回帰テスト50件の実行記録は§9.1～§9.3および `10-test-policy.md` §6.1～§6.4を参照する。以下の新規テスト実行結果とは区別する。
 - Stage 1の新規テストコードはIssue #20で実装済みであり、単体テスト、ワーカーライフサイクル、GUIポーリング、実Tkイベントループ統合テストを含む。
-- 2026-11-22に利用者環境で新規テストを含む全テストを実行し、追加統合テスト1件、`test_main` 25件、全体91件がすべて成功した（詳細は§9.4）。
+- 2026-11-22に利用者環境で新規テストを含む全テストを実行し、追加統合テスト1件、`test_main` 25件、全体91件がすべて成功した。初回実行は§9.4、ファイル保存ガード追加後の最終再実行は§9.5に記録する。
 - §9.4記録後に、実統合テスト内でファイル保存関数が呼ばれないことを明示的に検証するガードを追加した（コミット `ccb2bc0598431d9231038871d0264562045d8cc7`）。この追加変更は§9.4の実行結果には含まれないため、同期後の再実行をもって最終確認とする。
 - Stage 1のテスト範囲は仕様§3～§7と照合済み。confirmationの最終Event応答・FIFO・終了時解除はStage 3、非daemonワーカー・終了協調はStage 4の検証範囲とし、Stage 1の完了条件へ混在させない。
 
@@ -194,4 +198,25 @@ GUI不要の単体テストと実Tkイベントループを使う統合テスト
 - `git status -sb` — ローカルブランチとorigin追跡ブランチは同期。既存の未追跡ファイル `issue3-comment.md` は維持。
 - 追加統合テストは実Tkイベントループと実際のワーカー起動経路を使用し、YouTube API通信はモック化した。進捗1件と通知55件の登録、payload内にTkinterオブジェクトがないこと、GUI操作がメインスレッドで実行されること、通知55件を処理してキューが空になった後にWorkerHandleが解放されることを確認した。
 - テストログに出た例外・警告は異常系テストが意図的に発生させたもので、各テストは成功している。
-- この実行結果はStage 1テスト範囲の検証結果であり、Stage 2～4の新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認の完了を意味しない。
+- この実行結果はStage 1テスト範囲の初回検証結果であり、ファイル保存ガード追加後の最終再実行は§9.5を参照する。Stage 2～4の新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認の完了を意味しない。
+
+
+### 9.5 ファイル保存ガード追加後のStage 1最終再実行（2026-11-22）
+
+利用者提供の実行ログに基づく最終確認記録。
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`ef661789cb964a0600f095effb3da981e23f04d5`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。実Tkイベントループを利用可能。
+- 追加した実イベントループ統合テスト：`python -m unittest test_main.TkEventLoopIntegrationTests.test_real_event_loop_processes_worker_requests_before_releasing_handle -v` — 1 test、0.280秒、`OK`
+- `python -m unittest test_main -v` — 25 tests、0.785秒、`OK`
+- `python -m unittest discover -v` — 91 tests、1.556秒、`OK`
+- `git diff --check` — エラーなし。
+- `git fetch origin`／`git pull --ff-only` 後、ローカルHEADとorigin追跡ブランチは対象コミット `ef66178` で同期。 `git status -sb` では未追跡ファイル `issue3-comment.md` のみが残り、維持されている。
+- 追加統合テストは実Tkイベントループと実際の `_start_scrape_process()`／`_scrape_comments_task()` 経路を使用し、YouTube APIクライアントとJSON保存関数をモック化した。進捗1件・通知55件（合計56要求）、payload内にTkinterオブジェクトがないこと、GUI更新・通知表示がメインスレッドで実行されること、キューが空になり通知55件を処理した後にWorkerHandleが解放されることを確認した。
+- JSON保存関数 `json_data_handler.save_json_to_file` について `assert_not_called()` を追加し、統合テストが実ファイル保存を呼び出さないことも明示的に確認した。
+- `test_main.py` の25件には上記の追加統合テストが含まれる。 `module/utility/tk_async_tasks/test_tk_async_tasks.py` は16件であり、Stage 1テスト用の2ファイル計41テストケースを含む。全体91件には、PR #27マージ後の既存テスト50件も含まれる。
+- `test_main.py` のうち2テストにはStage 2の取得結果・保存結果GUI反映に関する補助的なクロスStage回帰確認が含まれる。これらはStage 1の合否条件やStage 2新規テスト群の完了には算入しない（Stage 1仕様 §6およびStage 2仕様 §9.1参照）。
+- ログ中の例外・警告は異常系テストが意図的に発生させたものであり、各テストは `ok`、各テスト実行は `OK` で終了した。
+- この最終再実行により、ファイル保存ガード追加後のStage 1テスト群と全体回帰テストの実行成功を確認した。Stage 2～4の専用新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認は別工程であり、本結果に含まれない。
