@@ -198,166 +198,226 @@ class YouTubeCommentScraperApp:
     def _scrape_comments_task(self, worker_handle: tk_async_tasks.WorkerHandle, video_id: str):
         """
         コメント取得のメイン処理（別スレッドで実行される）。
-        youtube_api_clientと連携し、進捗をGUIに反映させる。
+        ワーカーからGUIを操作せず、進捗・通知・保存結果をWorkerHandle経由で渡す。
         """
-        logger.info(f"動画ID '{video_id}' のコメント取得タスクを開始します。")
+        logger.info("動画ID '%s' のコメント取得タスクを開始します。", video_id)
 
-        # APIキーは_initialize_api_keyで設定済みのはず
-        assert self.api_key is not None, "APIキーがNoneです。これは初期化で防がれるべきです。"
+        api_key = self.api_key
+        assert api_key is not None, "APIキーがNoneです。これは初期化で防がれるべきです。"
 
-        # youtube_api_clientのコールバック関数を定義
-        def progress_callback(current_comments: int, total_comments: int | None, message: str):
-            tk_async_tasks.update_progress_gui(
-                self.master, self.progress_label, self.progress_bar, 
-                current_comments, total_comments, message
-            )
-            self.master.after(0, lambda: self.comment_count_label.config(
-                text=(f"取得コメント数: {current_comments} / {total_comments}" if total_comments is not None else f"取得コメント数: {current_comments} / 確定待ち")
-            ))
+        saved_files = worker_handle.partial_result.setdefault("saved_files", [])
 
+        def progress_callback(
+            current_comments: int,
+            total_comments: int | None,
+            message: str
+        ) -> None:
+            worker_handle.publish_progress({
+                "current_comments": current_comments,
+                "total_comments": total_comments,
+                "message": message,
+            })
+
+        # Stage 3でキュー経由の継続確認へ移行するまで、既存経路を維持する。
         def confirm_callback(message: str) -> bool:
             return tk_async_tasks.confirm_continuation_gui(self.master, message)
 
+        def save_file(kind: str, data: Any, filename: str) -> bool:
+            """保存を試みたファイルの成否を、確定直後にpartial_resultへ記録する。"""
+            path = os.path.join(output_dir, filename)
+            error_message = None
+            try:
+                success = bool(
+                    json_data_handler.save_json_to_file(
+                        data, filename, output_dir=output_dir
+                    )
+                )
+            except Exception as exc:
+                success = False
+                error_message = "{}: {}".format(type(exc).__name__, exc)
+                logger.exception(
+                    "%sの保存中に予期しない例外が発生しました。", kind
+                )
+
+            record = {
+                "kind": kind,
+                "path": path,
+                "success": success,
+            }
+            if error_message:
+                record["error"] = error_message
+            saved_files.append(record)
+
+            if success:
+                logger.info("%sを '%s' に保存しました。", kind, path)
+            else:
+                logger.error("%sの保存に失敗しました。保存先: %s", kind, path)
+            return success
+
         result_data, fetched_count, total_expected = youtube_api_client.fetch_all_comments(
-            self.api_key,
+            api_key,
             video_id,
-            progress_callback=progress_callback, # type:ignore
-            confirm_callback=confirm_callback
+            progress_callback=progress_callback,
+            confirm_callback=confirm_callback,
         )
-        
-        self.total_comments_expected = total_expected
 
         fetch_status = result_data.get("fetch_status", "failed")
-        fetch_errors = result_data.get("errors", [])
-        if result_data:
-            video_info_raw_response = result_data.get("video_info_raw_response", {})
-            channel_info_raw_response = result_data.get("channel_info_raw_response", {})
-            comment_threads_raw_responses = result_data.get("comment_threads_raw_responses", [])
-            comment_replies_raw_responses = result_data.get("comment_replies_raw_responses", [])
+        video_info_raw_response = result_data.get("video_info_raw_response", {})
+        channel_info_raw_response = result_data.get("channel_info_raw_response", {})
+        comment_threads_raw_responses = result_data.get(
+            "comment_threads_raw_responses", []
+        )
+        comment_replies_raw_responses = result_data.get(
+            "comment_replies_raw_responses", []
+        )
 
-            # --- 動画IDを名前にした専用フォルダを作成 ---
-            current_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)) # メインスクリプトのディレクトリを基準とする
-            current_date = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-            output_folder_name = f"youtube_data_{video_id}_{current_date}" # 例: youtube_data_dQw4w9WgXcQ
-            output_dir = os.path.join(current_dir, output_folder_name)
+        # 既存の保存先命名規則とファイル名・保存順を維持する。
+        current_dir = (
+            os.path.dirname(sys.executable)
+            if getattr(sys, "frozen", False)
+            else os.path.dirname(os.path.abspath(__file__))
+        )
+        current_date = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
+        output_folder_name = "youtube_data_{}_{}".format(video_id, current_date)
+        output_dir = os.path.join(current_dir, output_folder_name)
 
-            # json_data_handler.save_json_to_file がディレクトリ作成をサポートしているため、直接渡す
-            # --- 動画情報ファイルの保存 ---
-            video_info_filename = f"video_info_raw_{video_id}.json"
-            video_info_saved = False
-            if video_info_raw_response:
-                if json_data_handler.save_json_to_file(video_info_raw_response, video_info_filename, output_dir=output_dir):
-                    logger.info(f"動画情報Rawデータが '{os.path.join(output_dir, video_info_filename)}' に保存されました。")
-                    self.last_saved_video_info_file_path = os.path.join(output_dir, video_info_filename)
-                    video_info_saved = True
-                else:
-                    logger.error(f"動画情報Rawデータの保存に失敗しました。動画ID: {video_id}")
+        video_info_filename = "video_info_raw_{}.json".format(video_id)
+        channel_info_filename = None
+        comment_filename = "comments_raw_{}.json".format(video_id)
+        replies_filename = "comment_replies_raw_{}.json".format(video_id)
 
-            # --- チャンネル情報ファイルの保存 ---
-            channel_id = None
-            channel_info_filename: Optional[str] = None 
-            if channel_info_raw_response and channel_info_raw_response.get("items"):
-                channel_id = channel_info_raw_response["items"][0].get("id")
-            
-            channel_info_saved = False
-            if channel_id:
-                channel_info_filename = f"channel_info_raw_{channel_id}.json"
-                if json_data_handler.save_json_to_file(channel_info_raw_response, channel_info_filename, output_dir=output_dir):
-                    logger.info(f"チャンネル情報Rawデータが '{os.path.join(output_dir, channel_info_filename)}' に保存されました。")
-                    self.last_saved_channel_info_file_path = os.path.join(output_dir, channel_info_filename)
-                    channel_info_saved = True
-                else:
-                    logger.error(f"チャンネル情報Rawデータの保存に失敗しました。チャンネルID: {channel_id}")
-            else:
-                logger.warning(f"チャンネルIDが不明なため、チャンネル情報Rawデータの保存はスキップされました。")
+        video_info_saved = False
+        channel_info_saved = False
+        comments_saved = False
+        replies_saved = False
 
-            # --- コメントデータファイルの保存 ---
-            comment_filename = f"comments_raw_{video_id}.json"
-            comments_saved = False
-            if comment_threads_raw_responses:
-                if json_data_handler.save_json_to_file(comment_threads_raw_responses, comment_filename, output_dir=output_dir):
-                    logger.info(f"コメントデータが '{os.path.join(output_dir, comment_filename)}' に保存されました。")
-                    self.last_saved_comment_file_path = os.path.join(output_dir, comment_filename)
-                    comments_saved = True
-                else:
-                    logger.error(f"コメントデータの保存に失敗しました。動画ID: {video_id}")
+        if video_info_raw_response:
+            video_info_saved = save_file(
+                "video_info", video_info_raw_response, video_info_filename
+            )
 
-            # --- 返信コメントデータファイルの保存 ---
-            replies_saved = False
-            replies_filename = f"comment_replies_raw_{video_id}.json"
-            if comment_replies_raw_responses:
-                if json_data_handler.save_json_to_file(
-                    comment_replies_raw_responses, replies_filename, output_dir=output_dir
-                ):
-                    logger.info(f"返信コメントRawデータが '{os.path.join(output_dir, replies_filename)}' に保存されました。"
-                    )
-                    self.last_saved_replies_file_path = os.path.join(output_dir, replies_filename)
-                    replies_saved = True
-                else:
-                    logger.error(f"返信コメントRawデータの保存に失敗しました。動画ID: {video_id}")
+        channel_id = None
+        if channel_info_raw_response and channel_info_raw_response.get("items"):
+            channel_id = channel_info_raw_response["items"][0].get("id")
 
-            # 最終的なメッセージ表示ロジック
-            message_parts = []
-            if comments_saved:
-                message_parts.append(
-                    f"ユニークコメント数: {fetched_count} 件"
-                    f"（保存するRawデータは重複レコードを保持）"
-                    f" - '{comment_filename}'"
-                )
-            if replies_saved:
-                message_parts.append(f"返信コメントRawデータを '{replies_filename}' に")
-            if video_info_saved:
-                message_parts.append(f"動画情報Rawデータを '{video_info_filename}' に")
-            if channel_info_saved:
-                if channel_info_filename: #type:ignore
-                    message_parts.append(f"チャンネル情報Rawデータを '{channel_info_filename}' に")
-
-            if message_parts:
-                saved_summary = "、\n".join(message_parts) + f"を '{output_folder_name}' フォルダに保存しました。"
-                error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
-                if fetch_status == "comments_disabled":
-                    tk_notifications.show_warning(
-                        "コメント取得不可",
-                        "この動画ではコメントがオフに設定されているため、コメントを取得できませんでした。\n"
-                        + (
-                            "取得済みのコメントデータは保存されています。\n"
-                            if comments_saved else "コメントデータは保存されていません。\n"
-                        ) + saved_summary,
-                        parent=self.master
-                    )
-                elif fetch_status == "complete":
-                    tk_notifications.show_info("取得完了", "コメントの取得が正常に完了しました。\n" + saved_summary, parent=self.master)
-                elif fetch_status == "cancelled":
-                    cancellation_message = "ユーザー操作により取得を中断しました。取得済みデータを保存しました。\n" + saved_summary
-                    if error_summary:
-                        cancellation_message += "\n\n取得中に発生したエラー:\n" + error_summary
-                    tk_notifications.show_warning("取得中断", cancellation_message, parent=self.master)
-                elif fetch_status == "partial":
-                    tk_notifications.show_warning("部分取得", "一部のデータを取得できませんでした。保存済みデータは部分的な内容です。\n" + saved_summary + (f"\n\nエラー:\n{error_summary}" if error_summary else ""), parent=self.master)
-                else:
-                    tk_notifications.show_error("取得失敗", "必要なデータを取得できませんでした。取得済みデータのみ保存しました。\n" + saved_summary + (f"\n\nエラー:\n{error_summary}" if error_summary else ""), parent=self.master)
-                self.master.after(0, lambda: self.open_json_button.config(state=tk.NORMAL))
-            else:
-                error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
-                if fetch_status == "comments_disabled":
-                    tk_notifications.show_warning(
-                        "コメント取得不可",
-                        "この動画ではコメントがオフに設定されているため、コメントを取得できませんでした。"
-                        + ("\n\n" + error_summary if error_summary else ""),
-                        parent=self.master
-                    )
-                elif fetch_status == "cancelled":
-                    cancellation_message = "取得を中断しました。保存できるデータはありませんでした。"
-                    if error_summary:
-                        cancellation_message += "\n\n取得中に発生したエラー:\n" + error_summary
-                    tk_notifications.show_warning("取得中断", cancellation_message, parent=self.master)
-                else:
-                    tk_notifications.show_error("取得失敗", "データを保存できませんでした。\n" + error_summary, parent=self.master)
-
+        if channel_id:
+            channel_info_filename = "channel_info_raw_{}.json".format(channel_id)
+            channel_info_saved = save_file(
+                "channel_info", channel_info_raw_response, channel_info_filename
+            )
         else:
-            logger.error(f"コメントの取得に失敗しました。動画ID: {video_id}")
-            error_summary = "\n".join(error.get("message", "") for error in fetch_errors)
-            tk_notifications.show_error("取得失敗", error_summary or "コメントの取得に失敗しました。ログを確認してください。", parent=self.master)
+            logger.warning(
+                "チャンネルIDが不明なため、チャンネル情報Rawデータの保存はスキップされました。"
+            )
+
+        if comment_threads_raw_responses:
+            comments_saved = save_file(
+                "comments", comment_threads_raw_responses, comment_filename
+            )
+
+        if comment_replies_raw_responses:
+            replies_saved = save_file(
+                "replies", comment_replies_raw_responses, replies_filename
+            )
+
+        message_parts = []
+        if comments_saved:
+            message_parts.append(
+                "ユニークコメント数: {} 件（保存するRawデータは重複レコードを保持） - '{}'".format(
+                    fetched_count, comment_filename
+                )
+            )
+        if replies_saved:
+            message_parts.append(
+                "返信コメントRawデータを '{}' に".format(replies_filename)
+            )
+        if video_info_saved:
+            message_parts.append(
+                "動画情報Rawデータを '{}' に".format(video_info_filename)
+            )
+        if channel_info_saved and channel_info_filename:
+            message_parts.append(
+                "チャンネル情報Rawデータを '{}' に".format(channel_info_filename)
+            )
+
+        saved_summary = (
+            "、\n".join(message_parts)
+            + "を '{}' フォルダに保存しました。".format(output_folder_name)
+            if message_parts
+            else "保存できたファイルはありません。"
+        )
+        failed_records = [record for record in saved_files if not record["success"]]
+        failure_summary = ""
+        if failed_records:
+            failure_summary = "\n\n保存に失敗したファイル: " + "、".join(
+                os.path.basename(record["path"]) for record in failed_records
+            )
+
+        # APIクライアントが既に通知するAPIエラーをfetch_result["errors"]から
+        # 再通知しない。ここではタスク状態・保存結果という別の事象だけを通知する。
+        notification = None
+        if fetch_status == "comments_disabled":
+            notification = (
+                "warning",
+                "コメント取得不可",
+                "この動画ではコメントがオフに設定されているため、コメントを取得できませんでした。\n"
+                + saved_summary
+                + failure_summary,
+            )
+        elif fetch_status == "cancelled":
+            notification = (
+                "warning",
+                "取得中断",
+                "ユーザー操作により取得を中断しました。\n"
+                + saved_summary
+                + failure_summary,
+            )
+        elif fetch_status == "complete":
+            notification = (
+                "info",
+                "取得完了",
+                "コメントの取得処理が完了しました。\n"
+                + saved_summary
+                + failure_summary,
+            )
+        elif fetch_status == "partial":
+            notification = (
+                "warning",
+                "部分取得",
+                "一部のデータを取得できませんでした。保存結果は次のとおりです。\n"
+                + saved_summary
+                + failure_summary,
+            )
+        elif failed_records:
+            notification = (
+                "error",
+                "ファイル保存失敗",
+                "一部またはすべてのファイルを保存できませんでした。\n"
+                + saved_summary
+                + failure_summary,
+            )
+
+        if notification is not None:
+            notification_kind, title, message = notification
+            worker_handle.gui_request_queue.put(
+                tk_async_tasks.GuiRequest(
+                    kind="notification",
+                    payload={
+                        "kind": notification_kind,
+                        "title": title,
+                        "message": message,
+                    },
+                )
+            )
+
+        # normal resultとpartial_resultの保存結果を一致させる。
+        return {
+            "fetch_result": result_data,
+            "fetched_count": fetched_count,
+            "total_expected": total_expected,
+            "saved_files": list(saved_files),
+            "output_folder_name": output_folder_name,
+        }
 
     def _schedule_gui_request_polling(self):
         """GUI要求キューとワーカー状態をメインスレッドで定期確認する。"""
