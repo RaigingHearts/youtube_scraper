@@ -267,6 +267,7 @@ class YouTubeCommentScraperApp:
             video_id,
             progress_callback=progress_callback,
             confirm_callback=confirm_callback,
+            cancel_event=worker_handle.cancel_event,
         )
 
         # APIクライアントはGUIを操作せず、既存通知相当の分類情報を返す。
@@ -473,7 +474,7 @@ class YouTubeCommentScraperApp:
 
     def _on_close_request(self):
         """ウィンドウ終了要求を一度だけ受け付ける。"""
-        if self._shutdown_state != "running":
+        if self._shutdown_state not in ("running", "confirming"):
             return
         if self._dialog_active:
             self._shutdown_requested = True
@@ -491,10 +492,12 @@ class YouTubeCommentScraperApp:
         handle = self.worker_handle
         if handle is None:
             self._shutdown_state = "stopping"
+            self._collect_pending_shutdown_requests()
             self._finalize_shutdown()
             return
         if handle.done_event.is_set():
             self._shutdown_state = "stopping"
+            self._collect_pending_shutdown_requests()
             self._schedule_gui_request_polling()
             return
 
@@ -525,6 +528,7 @@ class YouTubeCommentScraperApp:
         if handle.done_event.is_set():
             handle.resolve_shutdown_decision(None)
             self._shutdown_state = "stopping"
+            self._collect_pending_shutdown_requests()
             self._schedule_gui_request_polling()
             return
 
@@ -714,6 +718,7 @@ class YouTubeCommentScraperApp:
         try:
             if request.kind == "confirmation":
                 handle = self.worker_handle
+                self._shutdown_state = "confirming"
                 if request.answered:
                     return
                 if handle is None:
@@ -754,6 +759,8 @@ class YouTubeCommentScraperApp:
                     logger.exception("通知ダイアログの表示に失敗しました。")
         finally:
             self._dialog_active = False
+            if self._shutdown_state == "confirming":
+                self._shutdown_state = "running"
         if self._shutdown_requested and self._shutdown_state == "running":
             self._shutdown_requested = False
             try:
@@ -870,7 +877,9 @@ class YouTubeCommentScraperApp:
         finally:
             self.worker_handle = None
 
-        if self._shutdown_state in ("stopping", "complete"):
+        if self._shutdown_state == "stopping":
+            self._shutdown_state = "complete"
+        if self._shutdown_state == "complete":
             self._finalize_shutdown()
 
     def _open_json_file(self):
