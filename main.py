@@ -799,12 +799,17 @@ class YouTubeCommentScraperApp:
         if (
             self._dialog_active
             or self._processing_pending_modal_requests
+            or self._shutdown_requested
             or self._shutdown_state in ("shutdown_pending", "stopping", "complete", "closed")
         ):
             return
         self._processing_pending_modal_requests = True
         try:
-            while self._pending_modal_requests and not self._dialog_active:
+            while (
+                self._pending_modal_requests
+                and not self._dialog_active
+                and not self._shutdown_requested
+            ):
                 request = self._pending_modal_requests.pop(0)
                 self._show_modal_request(request)
         finally:
