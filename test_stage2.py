@@ -484,14 +484,19 @@ class Stage2NotificationOrderingTests(unittest.TestCase):
         self.app._pending_modal_requests = [first, second]
         shown = []
 
+        call_count = {"value": 0}
+
+        def show_notice(title, *_args, **_kwargs):
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise RuntimeError("first dialog failed")
+            shown.append(title)
+
         with self.assertLogs(main.logger, level="ERROR"):
             with patch.object(
                 main.tk_notifications,
                 "show_info",
-                side_effect=[
-                    RuntimeError("first dialog failed"),
-                    lambda title, *_args, **_kwargs: shown.append(title),
-                ],
+                side_effect=show_notice,
             ) as show_info:
                 self.app._drain_pending_modal_requests()
 
@@ -549,6 +554,7 @@ class Stage2RealEventLoopIntegrationTests(unittest.TestCase):
         progress_thread_ids = []
         notification_thread_ids = []
         task_started = threading.Event()
+        start_returned = threading.Event()
 
         fetch_result = make_fetch_result(
             fetch_status="complete",
@@ -597,14 +603,22 @@ class Stage2RealEventLoopIntegrationTests(unittest.TestCase):
                                     threading.get_ident()
                                 ),
                             ):
-                                self.root.after(0, self.app._start_scrape_process)
+                                def start_scrape():
+                                    self.app._start_scrape_process()
+                                    start_returned.set()
+
+                                self.root.after(0, start_scrape)
                                 self.run_event_loop_until(
-                                    lambda: task_started.is_set()
+                                    lambda: start_returned.is_set()
+                                    and task_started.is_set()
                                     and self.app.worker_handle is None
                                 )
 
         self.assertEqual(save_file.call_count, 2)
-        self.assertEqual(progress_thread_ids, [self.main_thread_id, self.main_thread_id])
+        self.assertEqual(
+            progress_thread_ids,
+            [self.main_thread_id, self.main_thread_id, self.main_thread_id],
+        )
         self.assertEqual(
             notification_thread_ids,
             [self.main_thread_id, self.main_thread_id],
