@@ -93,7 +93,8 @@ def fetch_all_comments(
     video_id: str,
     progress_callback: Optional[Callable[[
         int, Optional[int], Optional[str]], None]] = None,
-    confirm_callback: Optional[Callable[[str], bool]] = None
+    confirm_callback: Optional[Callable[[str], bool]] = None,
+    cancel_event: Optional[Any] = None,
 ) -> tuple[dict, int, int]:
     """
     動画情報・チャンネル情報・コメントスレッドと、各スレッドの返信を取得する。
@@ -112,6 +113,20 @@ def fetch_all_comments(
         "notifications": []
     }
     result_data = empty_result
+
+    def is_cancelled() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
+    def wait_between_pages() -> bool:
+        if cancel_event is None:
+            time.sleep(0.1)
+            return False
+        return cancel_event.wait(0.1)
+
+    if is_cancelled():
+        result_data["fetch_status"] = "cancelled"
+        return result_data, 0, 0
+
     service_error_summaries = []
     service = get_youtube_service(
         api_key, error_callback=service_error_summaries.append
@@ -166,6 +181,9 @@ def fetch_all_comments(
     # 動画情報
     channel_id: Optional[str] = None
     try:
+        if is_cancelled():
+            result_data["fetch_status"] = "cancelled"
+            return result_data, comments_fetched_count, total_threads_expected
         video_response = service.videos().list(part="snippet", id=video_id).execute()
         result_data["video_info_raw_response"] = video_response
         if video_response.get("items"):
@@ -178,21 +196,28 @@ def fetch_all_comments(
             message = f"動画ID '{video_id}' の情報が見つかりませんでした。"
             record_error("video_info", message)
             logger.warning(message)
+        if is_cancelled():
+            result_data["fetch_status"] = "cancelled"
+            return result_data, comments_fetched_count, total_threads_expected
     except HttpError as e:
         message = f"動画情報の取得中にAPIエラーが発生しました: {_safe_exception_summary(e)}"
         record_error("video_info", message)
         logger.error(message)
         record_notification("video_info", "error", "APIエラー", message)
+        if is_cancelled():
+            result_data["fetch_status"] = "cancelled"
         return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
     except Exception as e:
         message = f"動画情報取得中に予期せぬエラーが発生しました: {_safe_exception_summary(e)}"
         record_error("video_info", message)
         logger.error(message)
         record_notification("video_info", "error", "エラー", message)
+        if is_cancelled():
+            result_data["fetch_status"] = "cancelled"
         return result_data, comments_fetched_count, total_threads_expected + total_replies_expected
 
     # チャンネル情報
-    if channel_id:
+    if channel_id and not is_cancelled():
         try:
             result_data["channel_info_raw_response"] = service.channels().list(
                 part="snippet", id=channel_id
@@ -214,6 +239,8 @@ def fetch_all_comments(
 
     # コメントスレッドと返信
     while True:
+        if is_cancelled():
+            break
         try:
             thread_page_number += 1
             request_page_token = next_page_token
@@ -287,6 +314,8 @@ def fetch_all_comments(
                 reply_page_number = 0
 
                 while True:
+                    if is_cancelled():
+                        break
                     try:
                         reply_page_number += 1
                         request_reply_page_token = reply_page_token
@@ -367,9 +396,10 @@ def fetch_all_comments(
                         )
 
                     reply_page_token = next_reply_page_token
-                    if not reply_page_token:
+                    if not reply_page_token or is_cancelled():
                         break
-                    time.sleep(0.1)
+                    if wait_between_pages():
+                        break
 
                 if stop_after_current_thread_page:
                     break
@@ -387,7 +417,7 @@ def fetch_all_comments(
                     f"コメント取得中... ({comments_fetched_count}件)"
                 )
 
-            if stop_after_current_thread_page:
+            if stop_after_current_thread_page or is_cancelled():
                 break
 
             if not next_page_token:
@@ -410,7 +440,8 @@ def fetch_all_comments(
                     logger.info("ユーザーによってコメント取得が中断されました。")
                     break
 
-            time.sleep(0.1)
+            if wait_between_pages():
+                break
 
         except HttpError as e:
             api_error_reason = _get_api_error_reason(e)
@@ -463,10 +494,10 @@ def fetch_all_comments(
     total_comments_expected = (
         total_threads_expected + total_replies_expected if expected_total_confirmed else 0
     )
-    if comments_disabled:
-        result_data["fetch_status"] = "comments_disabled"
-    elif user_cancelled:
+    if is_cancelled() or user_cancelled:
         result_data["fetch_status"] = "cancelled"
+    elif comments_disabled:
+        result_data["fetch_status"] = "comments_disabled"
     elif result_data["errors"]:
         result_data["fetch_status"] = "partial" if comments_fetched_count > 0 or comment_threads_completed else "failed"
     elif comment_threads_completed:
