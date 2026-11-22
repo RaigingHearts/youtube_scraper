@@ -107,6 +107,7 @@ class ScrapeTaskProgressAndNotificationTests(unittest.TestCase):
         )
 
     def test_progress_update_during_marker_consumption_queues_next_marker(self):
+        self.app.worker_handle = self.handle
         first_progress = {
             "current_comments": 2,
             "total_comments": 10,
