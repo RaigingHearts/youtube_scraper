@@ -17,6 +17,7 @@ WorkerHandleは一つのワーカー実行のライフサイクルを管理す�
 - shutdown_lock、shutdown_decision_event、shutdown_pending：終了判断バリア
 - save_policy、save_started：終了時保存方針と保存開始状態
 - cancel_reason：最初に確定したキャンセル原因の補足情報。confirmation_lockで保護し、後から上書きしない
+- exception_notification_queued：ワーカー例外通知をGUI要求キューへ一度だけ登録したことを示す
 
 Eventは初期状態unset、フラグはFalse、result/exception/latest_progressは未設定状態から開始する。partial_resultは保存処理開始前に初期化し、main.pyはdone_event後に読み取る。実装上のデータ型はPython 3.8.10で扱える標準型とし、新規外部依存を追加しない。
 
