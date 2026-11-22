@@ -32,7 +32,7 @@ Stage 1～4で導入・移行した機能を組み合わせ、個別Stageでは�
 - 継続確認Trueで取得継続、Falseで中止し、応答Eventが確実に解除されること。
 - 確認要求が複数ある場合にEvent・応答が混線せず、pending_confirmationsへの登録・解除に漏れがないこと。
 - 利用者のTrue/False回答ではresponse_reason=user_response、Falseの場合のみcancel_reason=continuation_declinedとなること。終了解除・表示不能では各々application_shutdown・confirmation_unavailableがresponse_reasonとcancel_reasonへ正しく反映されること。
-- モーダルダイアログ表示中にポーリングが再入しても新しいダイアログを開かず、保留した通知・確認要求をFIFOで処理すること。
+- モーダルダイアログ表示中にポーリングが再入しても新しいダイアログを開かず、保留した通知・確認要求をFIFOで処理すること。ワーカー例外通知も同じGUI要求経路で表示し、保留中のモーダル要求が残る間は完了後処理を確定しないこと。
 - APIクライアントがGUIを操作せず、戻り値・エラー情報を呼び出し元へ返すこと。
 - 従来通知対象だったAPIエラーだけが適切な種別で一度通知され、従来ログのみだった事象が通知に昇格しないこと。
 - APIエラー、確認ダイアログ例外、確認待機中の状態を組み合わせても二重通知・待機残りがないこと。
@@ -76,6 +76,6 @@ Issue #10の進捗件数推定・超過問題など、Issue #3の対象外機能
 - 通知レコードの stage/kind/title/message、従来の利用者向け通知対象、ログのみの事象、commentsDisabledの専用warningを区別する。
 - fetch_all_comments() の3要素タプル、既存 fetch_status、取得結果、取得件数の互換性を確認する。
 - 終了処理と確認回答の競合では、先に確定したresponseとresponse_reasonを保持し、後から確定した終了理由はcancel_reasonへ別途記録する。
-- 終了後にFIFO保留列へ残った古い確認要求がダイアログ表示されず、Event待機が残らないことを確認する。
+- 終了後にFIFO保留列へ残った古い確認要求がダイアログ表示されず、Event待機が残らないことを確認する。確認要求のdisplay_started設定と終了処理の競合では、Lock内で先に確定した表示開始・終了解除のどちらか一方だけが成立し、表示開始済み要求の応答値を終了処理が上書きしないことを確認する。
 
 これらはIssue #20で実装・実行する検証項目であり、現時点で合格済みではない。
