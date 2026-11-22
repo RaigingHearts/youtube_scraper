@@ -49,6 +49,12 @@ class GuiPollingTests(YouTubeCommentScraperAppTestCase):
         app.master.after.assert_called_once_with(50, app._poll_gui_requests)
         self.assertEqual(app._gui_poll_after_id, app.master.after.return_value)
 
+    def test_empty_queue_still_reschedules_polling(self):
+        app = self.make_app()
+        app._poll_gui_requests()
+        self.assertTrue(app.gui_request_queue.empty())
+        app.master.after.assert_called_once_with(50, app._poll_gui_requests)
+
     def test_polling_is_not_scheduled_twice(self):
         app = self.make_app()
         app._gui_poll_after_id = "already-scheduled"
@@ -127,6 +133,41 @@ class GuiPollingTests(YouTubeCommentScraperAppTestCase):
         app.master.after.assert_called_once_with(50, app._poll_gui_requests)
 
 
+class NotificationDispatchTests(YouTubeCommentScraperAppTestCase):
+    def test_notification_kinds_are_dispatched_to_matching_handlers(self):
+        cases = (
+            ("info", "show_info"),
+            ("warning", "show_warning"),
+            ("error", "show_error"),
+        )
+        for kind, handler_name in cases:
+            with self.subTest(kind=kind):
+                app = self.make_app()
+                request = tk_async_tasks.GuiRequest(
+                    kind="notification",
+                    payload={"kind": kind, "title": "title", "message": "message"},
+                )
+                with patch.object(main.tk_notifications, handler_name) as handler:
+                    app._handle_gui_request(request)
+                handler.assert_called_once_with(
+                    "title", "message", parent=app.master
+                )
+
+    def test_notification_display_exception_is_contained_and_dialog_state_resets(self):
+        app = self.make_app()
+        request = tk_async_tasks.GuiRequest(
+            kind="notification",
+            payload={"kind": "info", "title": "title", "message": "message"},
+        )
+        with self.assertLogs(main.logger, level="ERROR"):
+            with patch.object(
+                main.tk_notifications, "show_info",
+                side_effect=RuntimeError("dialog failed"),
+            ):
+                app._show_modal_request(request)
+        self.assertFalse(app._dialog_active)
+
+
 class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
     def make_finished_handle(self, app, result=None, exception=None):
         handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
@@ -135,6 +176,36 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
         handle.done_event.set()
         app.worker_handle = handle
         return handle
+
+    def test_existing_worker_prevents_duplicate_start(self):
+        app = self.make_app()
+        app.worker_handle = object()
+        with self.assertLogs(main.logger, level="WARNING"):
+            with patch.object(tk_async_tasks, "run_task_in_thread") as run_task:
+                app._start_scrape_process()
+        run_task.assert_not_called()
+
+    def test_new_worker_can_start_after_previous_worker_finishes(self):
+        app = self.make_app()
+        previous = self.make_finished_handle(app, result={"saved_files": []})
+        with patch.object(tk_async_tasks, "_perform_gui_update"):
+            app._finish_worker(previous)
+        self.assertIsNone(app.worker_handle)
+
+        app.api_key = "test-key"
+        app.video_id_entry = MagicMock()
+        app.video_id_entry.get.return_value = "abcdefghijk"
+        next_handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(
+                tk_async_tasks, "run_task_in_thread", return_value=next_handle
+            ) as run_task:
+                with patch.object(tk_async_tasks, "_perform_gui_update"):
+                    app._start_scrape_process()
+        run_task.assert_called_once_with(
+            app._scrape_comments_task, app.gui_request_queue, "abcdefghijk"
+        )
+        self.assertIs(app.worker_handle, next_handle)
 
     def test_finish_worker_waits_until_gui_queue_is_empty(self):
         app = self.make_app()
