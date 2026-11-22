@@ -508,31 +508,83 @@ class YouTubeCommentScraperApp:
         logger.warning("未知のGUI要求種別を受信しました: %s", request.kind)
 
     def _finish_worker(self, handle: tk_async_tasks.WorkerHandle):
-        """完了情報をGUIスレッドで回収し、GUI状態を復旧する。"""
+        """ワーカー結果・部分保存結果をメインスレッドで回収し、GUI状態を復旧する。"""
         if self.worker_handle is not handle or not handle.done_event.is_set():
             return
         if not self.gui_request_queue.empty():
             return
 
+        result = handle.result if isinstance(handle.result, dict) else {}
+        if handle.exception is None:
+            saved_files = result.get("saved_files", [])
+        else:
+            saved_files = handle.partial_result.get("saved_files", [])
+
+        # GUI所有の保存先属性はメインスレッドでのみ更新する。
+        path_attributes = {
+            "video_info": "last_saved_video_info_file_path",
+            "channel_info": "last_saved_channel_info_file_path",
+            "comments": "last_saved_comment_file_path",
+            "replies": "last_saved_replies_file_path",
+        }
+        valid_saved_paths = []
+        for record in saved_files:
+            if not isinstance(record, dict) or record.get("success") is not True:
+                continue
+            kind = record.get("kind")
+            path = record.get("path")
+            attribute = path_attributes.get(kind)
+            if attribute is None or not isinstance(path, str) or not path:
+                logger.warning("不正な保存結果レコードを無視しました: %r", record)
+                continue
+            setattr(self, attribute, path)
+            valid_saved_paths.append(path)
+
+        if handle.exception is None and "total_expected" in result:
+            self.total_comments_expected = result["total_expected"]
+        if handle.exception is None and "fetched_count" in result:
+            fetched_count = result["fetched_count"]
+            total_expected = result.get("total_expected")
+            count_text = (
+                "取得コメント数: {} / {}".format(fetched_count, total_expected)
+                if total_expected is not None
+                else "取得コメント数: {} / 確定待ち".format(fetched_count)
+            )
+            self.comment_count_label.config(text=count_text)
+
         try:
             if handle.exception is not None:
-                logger.error("ワーカーが例外終了しました。",
-                             exc_info=(type(handle.exception), handle.exception, handle.exception.__traceback__))
+                logger.error(
+                    "ワーカーが例外終了しました。",
+                    exc_info=(
+                        type(handle.exception),
+                        handle.exception,
+                        handle.exception.__traceback__,
+                    ),
+                )
                 try:
-                    tk_notifications.show_error("取得失敗", str(handle.exception), parent=self.master)
+                    tk_notifications.show_error(
+                        "取得失敗", str(handle.exception), parent=self.master
+                    )
                 except Exception:
                     logger.exception("ワーカー例外の通知表示に失敗しました。")
         finally:
-            # 通知表示の成否にかかわらずGUI状態を復旧してからWorkerHandleを解放する。
+            # 例外終了時もpartial_resultから復元した保存ファイルを利用可能にする。
+            self.open_json_button.config(
+                state=tk.NORMAL if valid_saved_paths else tk.DISABLED
+            )
             self.scrape_button.config(state=tk.NORMAL)
             maximum = self.progress_bar["maximum"]
             try:
                 tk_async_tasks._perform_gui_update(
-                    self.progress_label, self.progress_bar, maximum, maximum, "コメント取得処理終了"
+                    self.progress_label,
+                    self.progress_bar,
+                    maximum,
+                    maximum,
+                    "コメント取得処理終了",
                 )
             finally:
                 self.worker_handle = None
-
 
     def _open_json_file(self):
         """保存されたJSONファイルを開く。"""
