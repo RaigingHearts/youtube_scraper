@@ -787,7 +787,10 @@ class YouTubeCommentScraperApp:
                 self.master.after_idle(self._begin_shutdown)
             except tk.TclError:
                 logger.debug("終了要求の予約時にrootが破棄されていました。")
-        if not self._processing_pending_modal_requests:
+        if (
+            not self._shutdown_requested
+            and not self._processing_pending_modal_requests
+        ):
             self._drain_pending_modal_requests()
 
     def _drain_pending_modal_requests(self) -> None:
