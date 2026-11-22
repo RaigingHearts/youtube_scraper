@@ -8,7 +8,7 @@
 GUI要求キューの生成・所有、WorkerHandleの保持、メインスレッドでのポーリング、要求振り分け、ワーカー終了監視、WorkerHandleに格納された戻り値・例外の回収を担当する。Stage 1では戻り値をWorkerHandle.resultから回収可能な状態にすることまでを基盤責務とし、取得結果の内容をGUI所有状態へ反映する処理はStage 2で実装する。
 
 ### tk_async_tasks.py
-GuiRequest、WorkerHandle、ワーカー生成・実行管理を定義する。既存関数・旧方式は全呼び出し箇所の移行が完了するまで互換性を保ち、移行完了後に削除する。
+GuiRequest、WorkerHandle、ワーカー生成・実行管理を定義する。当初は既存呼び出しとの移行期間に限り旧方式の互換性を保つ。2026-11-22時点で実装コードの呼び出し元を確認した結果、`run_task_in_thread()` の呼び出しは `main.py` の1箇所のみで、新方式（`queue.Queue` を渡し、WorkerHandleを第1引数に受けるワーカー関数）へ移行済みである。このため旧方式の互換経路は廃止し、現行関数は `queue.Queue` を必須とする。
 
 ## 3. GuiRequest
 共通属性はkind、payload、request_idとする。kindはprogress、notification、confirmation。confirmationではresponse_event、response、answeredを追加で保持する。payloadにTkinterウィジェット、Tk変数、rootを含めない。各種payloadの具体的なキーは09-cross-stage-interface.mdに従う。
