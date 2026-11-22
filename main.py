@@ -522,11 +522,13 @@ class YouTubeCommentScraperApp:
             request.response = bool(response)
             request.response_reason = response_reason
             request.answered = True
-            if not response:
-                if response_reason == "user_response" and handle.cancel_reason is None:
+            if not response and handle.cancel_reason is None:
+                if response_reason == "user_response":
                     handle.cancel_reason = "continuation_declined"
-                elif response_reason == "confirmation_unavailable" and handle.cancel_reason is None:
+                elif response_reason == "confirmation_unavailable":
                     handle.cancel_reason = "confirmation_unavailable"
+                elif response_reason == "application_shutdown":
+                    handle.cancel_reason = "application_shutdown"
             request.response_event.set()
 
     def _show_modal_request(self, request: tk_async_tasks.GuiRequest) -> None:
@@ -546,6 +548,9 @@ class YouTubeCommentScraperApp:
                 with handle.confirmation_lock:
                     already_answered = request.answered
                     shutdown_started = handle.cancel_event.is_set()
+                    if not already_answered and not shutdown_started:
+                        # このLock内で表示開始を確定し、終了処理との競合に境界を設ける。
+                        request.display_started = True
                 if already_answered:
                     return
                 if shutdown_started:
@@ -594,7 +599,35 @@ class YouTubeCommentScraperApp:
         """ワーカー結果・部分保存結果をメインスレッドで回収し、GUI状態を復旧する。"""
         if self.worker_handle is not handle or not handle.done_event.is_set():
             return
-        if not self.gui_request_queue.empty():
+        if (
+            not self.gui_request_queue.empty()
+            or self._dialog_active
+            or self._pending_modal_requests
+            or self._processing_pending_modal_requests
+        ):
+            return
+
+        # ワーカー例外も通常通知と同じGUI要求経路へ載せ、モーダル表示を一元化する。
+        if handle.exception is not None and not handle.exception_notification_queued:
+            logger.error(
+                "ワーカーが例外終了しました。",
+                exc_info=(
+                    type(handle.exception),
+                    handle.exception,
+                    handle.exception.__traceback__,
+                ),
+            )
+            self.gui_request_queue.put(
+                tk_async_tasks.GuiRequest(
+                    kind="notification",
+                    payload={
+                        "kind": "error",
+                        "title": "取得失敗",
+                        "message": str(handle.exception),
+                    },
+                )
+            )
+            handle.exception_notification_queued = True
             return
 
         result = handle.result if isinstance(handle.result, dict) else {}
@@ -636,21 +669,8 @@ class YouTubeCommentScraperApp:
             self.comment_count_label.config(text=count_text)
 
         try:
-            if handle.exception is not None:
-                logger.error(
-                    "ワーカーが例外終了しました。",
-                    exc_info=(
-                        type(handle.exception),
-                        handle.exception,
-                        handle.exception.__traceback__,
-                    ),
-                )
-                try:
-                    tk_notifications.show_error(
-                        "取得失敗", str(handle.exception), parent=self.master
-                    )
-                except Exception:
-                    logger.exception("ワーカー例外の通知表示に失敗しました。")
+            # 例外通知は上でGUI要求キューへ登録済み。ここでは結果回収とGUI復旧だけを行う。
+            pass
         finally:
             # 例外終了時もpartial_resultから復元した保存ファイルを利用可能にする。
             self.open_json_button.config(
