@@ -173,3 +173,22 @@ Issue #3のStage 1～4の実装作業中は、各Stageの新規テスト仕様�
 - 実行ログに出力された保存失敗・ワーカー例外・GUI要求例外等は、異常系テストによる想定出力であり、対応するテストは成功した。
 - 実API通信は行わず、実Tkイベントループ統合テストは利用者のWindowsデスクトップ環境で実行された。Git同期時には作業ブランチがorigin追跡ブランチと同期し、未追跡ファイル `issue3-comment.md` が保持されたとの報告を受けた。
 - Stage 2専用テスト実行およびStage 2最終横断確認は完了した。Stage 1～4の全体統合検証と実デスクトップ受け入れ確認全体は別途管理する。
+
+
+### 6.8 Stage 3新規テスト検証結果（2026-11-23）
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`562c3f0e2c7832ca5fd79af18a28d3cd725527a2`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`
+- `python -m unittest test_stage3 -v)：24 tests、0.145秒、`OK`
+- `python -m unittest test_main -v)：25 tests、0.768秒、`OK`
+- `python -m unittest discover -v)：135 tests、2.198秒、`OK`
+- `git status -sb`：ローカルブランチとorigin追跡ブランチは同期。tracked filesの変更なし。未追跡ファイル `issue3-comment.md` は維持。
+- `git diff --check`：エラーなし。
+
+Stage 3専用テストは24件。確認要求のEventライフサイクル・競合、モーダルFIFO・例外復旧、APIクライアント境界、通知契約、継続確認のタスク結果への伝達を検証した。追加2件では `application_shutdown` と `confirmation_unavailable` のキャンセル理由が `fetch_result["cancel_reason"]` へ反映されることを確認した。実YouTube API通信は行っていない。全体135件は `unittest discover` の検出・実行数であり、個別テスト群の件数とは重複するため合算しない。
+
+ログに出力された例外・警告は異常系テストの想定出力であり、実行結果は全件成功。
+
+**未実施項目：** Stage 3の確認要求・モーダルFIFOを実Tkイベントループ上で組み合わせる専用GUI統合テスト、および実デスクトップ受け入れ確認は未実施。これらはStage 1～4全体統合検証で別途実施する。全体135件の成功をもって、これらの未実施項目を合格とは扱わない。
