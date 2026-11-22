@@ -197,7 +197,8 @@ class YouTubeCommentScraperApp:
         except Exception as exc:
             logger.exception("ワーカーの起動に失敗しました。")
             self.scrape_button.config(state=tk.NORMAL)
-            self.open_json_button.config(state=tk.NORMAL)
+            # 保存先パスは起動前にクリア済みのため、JSONボタンは無効のままにする。
+            self.open_json_button.config(state=tk.DISABLED)
             tk_async_tasks._perform_gui_update(
                 self.progress_label, self.progress_bar, 0, 0, "準備完了"
             )
