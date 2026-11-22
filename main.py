@@ -189,6 +189,7 @@ class YouTubeCommentScraperApp:
         except Exception as exc:
             logger.exception("ワーカーの起動に失敗しました。")
             self.scrape_button.config(state=tk.NORMAL)
+            self.open_json_button.config(state=tk.NORMAL)
             tk_async_tasks._perform_gui_update(
                 self.progress_label, self.progress_bar, 0, 0, "準備完了"
             )
