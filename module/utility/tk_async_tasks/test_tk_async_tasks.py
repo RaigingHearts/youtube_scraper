@@ -100,6 +100,7 @@ class ProgressAggregationTests(unittest.TestCase):
         self.assertEqual(self.request_queue.qsize(), 1)
         request = self.request_queue.get_nowait()
         self.assertEqual(request.kind, "progress")
+        self.assertEqual(request.payload, {})
         self.assertEqual(self.handle.take_latest_progress(), {"current": 3})
         self.assertFalse(self.handle.progress_marker_queued)
 
