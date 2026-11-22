@@ -1,0 +1,258 @@
+"""main.py のGUI要求キュー・ワーカー管理のテスト。
+
+GUI不要の単体テストを中心に、Tkイベントループを使う統合テストも含める。
+YouTube API通信・ファイル保存・モーダル表示は実行しない。
+"""
+import queue
+import tkinter as tk
+import unittest
+from unittest.mock import MagicMock, patch
+
+import main
+from module.utility.tk_async_tasks import tk_async_tasks
+
+
+class YouTubeCommentScraperAppTestCase(unittest.TestCase):
+    def make_app(self):
+        app = main.YouTubeCommentScraperApp.__new__(
+            main.YouTubeCommentScraperApp
+        )
+        app.master = MagicMock()
+        app.gui_request_queue = queue.Queue()
+        app.worker_handle = None
+        app._gui_poll_after_id = None
+        app._dialog_active = False
+        app._pending_modal_requests = []
+        app._processing_pending_modal_requests = False
+        app._shutdown_state = "running"
+        app._shutdown_requested = False
+        app._shutdown_notifications = []
+        app._shutdown_summary_shown = False
+        app.progress_label = MagicMock()
+        app.progress_bar = MagicMock()
+        app.progress_bar.__getitem__.return_value = 100
+        app.comment_count_label = MagicMock()
+        app.scrape_button = MagicMock()
+        app.open_json_button = MagicMock()
+        app.last_saved_comment_file_path = None
+        app.last_saved_video_info_file_path = None
+        app.last_saved_channel_info_file_path = None
+        app.last_saved_replies_file_path = None
+        app.total_comments_expected = 0
+        return app
+
+
+class GuiPollingTests(YouTubeCommentScraperAppTestCase):
+    def test_initial_poll_is_scheduled_after_50ms(self):
+        app = self.make_app()
+        app._schedule_gui_request_polling()
+        app.master.after.assert_called_once_with(50, app._poll_gui_requests)
+        self.assertEqual(app._gui_poll_after_id, app.master.after.return_value)
+
+    def test_polling_is_not_scheduled_twice(self):
+        app = self.make_app()
+        app._gui_poll_after_id = "already-scheduled"
+        app._schedule_gui_request_polling()
+        app.master.after.assert_not_called()
+        self.assertEqual(app._gui_poll_after_id, "already-scheduled")
+
+    def test_polling_after_destroyed_root_catches_tcl_error(self):
+        app = self.make_app()
+        app.master.after.side_effect = tk.TclError("root destroyed")
+        app._schedule_gui_request_polling()
+        self.assertIsNone(app._gui_poll_after_id)
+
+    def test_poll_processes_at_most_50_requests_and_reschedules(self):
+        app = self.make_app()
+        for _ in range(55):
+            app.gui_request_queue.put(tk_async_tasks.GuiRequest(kind="unknown"))
+        with patch.object(app, "_handle_gui_request") as handle_request:
+            app._poll_gui_requests()
+        self.assertEqual(handle_request.call_count, 50)
+        self.assertEqual(app.gui_request_queue.qsize(), 5)
+        app.master.after.assert_called_once_with(50, app._poll_gui_requests)
+
+    def test_poll_continues_after_request_handler_raises(self):
+        app = self.make_app()
+        first = tk_async_tasks.GuiRequest(kind="first")
+        second = tk_async_tasks.GuiRequest(kind="second")
+        app.gui_request_queue.put(first)
+        app.gui_request_queue.put(second)
+
+        def handle(request):
+            if request is first:
+                raise RuntimeError("request failed")
+
+        with patch.object(app, "_handle_gui_request", side_effect=handle) as mocked:
+            app._poll_gui_requests()
+        self.assertEqual(mocked.call_count, 2)
+        self.assertTrue(app.gui_request_queue.empty())
+        app.master.after.assert_called_once_with(50, app._poll_gui_requests)
+
+    def test_poll_logs_and_continues_after_invalid_object(self):
+        app = self.make_app()
+        app.gui_request_queue.put(object())
+        app.gui_request_queue.put(tk_async_tasks.GuiRequest(kind="unknown"))
+        with self.assertLogs(main.logger, level="WARNING"):
+            app._poll_gui_requests()
+        self.assertTrue(app.gui_request_queue.empty())
+        app.master.after.assert_called_once_with(50, app._poll_gui_requests)
+
+    def test_progress_request_updates_widgets_on_polling_thread(self):
+        app = self.make_app()
+        handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        handle.latest_progress = {
+            "current_comments": 7,
+            "total_comments": 12,
+            "message": "取得中",
+        }
+        handle.progress_marker_queued = True
+        app.worker_handle = handle
+        app.gui_request_queue.put(tk_async_tasks.GuiRequest(kind="progress"))
+        with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+            app._poll_gui_requests()
+        update.assert_called_once_with(
+            app.progress_label, app.progress_bar, 7, 12, "取得中"
+        )
+        app.comment_count_label.config.assert_called_once_with(
+            text="取得コメント数: 7 / 12"
+        )
+
+    def test_unknown_request_kind_does_not_stop_polling(self):
+        app = self.make_app()
+        app.gui_request_queue.put(tk_async_tasks.GuiRequest(kind="not-supported"))
+        with self.assertLogs(main.logger, level="WARNING"):
+            app._poll_gui_requests()
+        self.assertTrue(app.gui_request_queue.empty())
+        app.master.after.assert_called_once_with(50, app._poll_gui_requests)
+
+
+class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
+    def make_finished_handle(self, app, result=None, exception=None):
+        handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        handle.result = result
+        handle.exception = exception
+        handle.done_event.set()
+        app.worker_handle = handle
+        return handle
+
+    def test_finish_worker_waits_until_gui_queue_is_empty(self):
+        app = self.make_app()
+        handle = self.make_finished_handle(app, result={})
+        app.gui_request_queue.put(tk_async_tasks.GuiRequest(kind="unknown"))
+        app._finish_worker(handle)
+        self.assertIs(app.worker_handle, handle)
+        app.scrape_button.config.assert_not_called()
+
+    def test_finish_worker_restores_widgets_and_saved_file_paths(self):
+        app = self.make_app()
+        handle = self.make_finished_handle(
+            app,
+            result={
+                "saved_files": [{
+                    "kind": "comments",
+                    "path": "output/comments.json",
+                    "success": True,
+                }],
+                "fetched_count": 4,
+                "total_expected": 4,
+            },
+        )
+        with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+            app._finish_worker(handle)
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app.last_saved_comment_file_path, "output/comments.json")
+        app.open_json_button.config.assert_called_once_with(state=tk.NORMAL)
+        app.scrape_button.config.assert_called_once_with(state=tk.NORMAL)
+        update.assert_called_once()
+
+    def test_finish_worker_keeps_json_button_disabled_without_saved_files(self):
+        app = self.make_app()
+        handle = self.make_finished_handle(app, result={"saved_files": []})
+        with patch.object(tk_async_tasks, "_perform_gui_update"):
+            app._finish_worker(handle)
+        app.open_json_button.config.assert_called_once_with(state=tk.DISABLED)
+        self.assertIsNone(app.worker_handle)
+
+    def test_finish_worker_queues_exception_notification_before_release(self):
+        app = self.make_app()
+        handle = self.make_finished_handle(
+            app, exception=RuntimeError("worker failed")
+        )
+        app._finish_worker(handle)
+        self.assertIs(app.worker_handle, handle)
+        self.assertTrue(handle.exception_notification_queued)
+        request = app.gui_request_queue.get_nowait()
+        self.assertEqual(request.kind, "notification")
+        self.assertEqual(request.payload["kind"], "error")
+        self.assertEqual(request.payload["message"], "worker failed")
+
+    def test_start_failure_restores_gui_and_keeps_json_button_disabled(self):
+        app = self.make_app()
+        app.api_key = "test-key"
+        app.video_id_entry = MagicMock()
+        app.video_id_entry.get.return_value = "abcdefghijk"
+        app.last_saved_comment_file_path = "old-path"
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(
+                tk_async_tasks, "run_task_in_thread",
+                side_effect=RuntimeError("thread start failed"),
+            ):
+                with patch.object(main.tk_notifications, "show_error") as show_error:
+                    with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+                        app._start_scrape_process()
+        self.assertIsNone(app.worker_handle)
+        app.scrape_button.config.assert_any_call(state=tk.DISABLED)
+        app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+        app.open_json_button.config.assert_any_call(state=tk.DISABLED)
+        self.assertIsNone(app.last_saved_comment_file_path)
+        update.assert_called()
+        show_error.assert_called_once()
+
+
+class TkEventLoopIntegrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.root = tk.Tk()
+            cls.root.withdraw()
+        except tk.TclError as exc:
+            raise unittest.SkipTest(
+                "Tk GUI環境を利用できないため統合テストをスキップ: {}".format(exc)
+            )
+
+    @classmethod
+    def tearDownClass(cls):
+        if getattr(cls, "root", None) is not None:
+            try:
+                cls.root.destroy()
+            except tk.TclError:
+                pass
+
+    def test_real_event_loop_dispatches_queued_notification(self):
+        app = YouTubeCommentScraperAppTestCase().make_app()
+        app.master = self.root
+        app.gui_request_queue.put(
+            tk_async_tasks.GuiRequest(
+                kind="notification",
+                payload={
+                    "kind": "info",
+                    "title": "test",
+                    "message": "event-loop",
+                },
+            )
+        )
+        with patch.object(main.tk_notifications, "show_info") as show_info:
+            app._poll_gui_requests()
+            self.root.update()
+        show_info.assert_called_once_with("test", "event-loop", parent=self.root)
+        if app._gui_poll_after_id is not None:
+            try:
+                self.root.after_cancel(app._gui_poll_after_id)
+            except tk.TclError:
+                pass
+            app._gui_poll_after_id = None
+
+
+if __name__ == "__main__":
+    unittest.main()
