@@ -121,3 +121,15 @@ Issue #3は機能要件・インターフェース・受け入れ条件を定義
 
 ## 16. 文書登録方針
 必要な設計書・テスト仕様書を一式揃え、相互のインターフェース、用語、対象範囲、完了条件、Issue #20への引き継ぎを確認した後に登録する。文書登録はソースコード変更や実装開始の承認とは別に扱う。
+
+
+## 17. Stage 3実装反映後の実インターフェース記録（2026-11-22）
+
+Stage 3実装で確定した実コード上の契約を記録する。
+
+- WorkerHandle.request_confirmation(message) は要求を pending_confirmations に登録し、同じ confirmation_lock 保護区間でGUI要求キューへ投入してから、要求固有の response_event を待つ。待機終了時はfinally経路で登録を解除する。
+- 確認応答の response_reason は user_response（True/Falseの利用者回答）、application_shutdown（終了による未回答解除）、confirmation_unavailable（表示不能・表示例外）を表す。cancel_reason は取得処理を止めた原因を表し、最初に確定した値を保持する。
+- youtube_api_client.fetch_all_comments() は従来どおり3要素タプルを返す。通知分類は result_data["notifications"] の各レコード（stage、kind、title、message）で返し、APIクライアント自身はTkinter通知を行わない。
+- 確認・通知モーダルはGUI側で直列化し、表示中の再入要求をFIFO保留列に置く。終了処理開始後は保留中の古い確認要求を新たに表示しない。
+
+上記はStage 3の実装反映記録であり、Issue #20による新規テスト実装・実行の完了を示すものではない。実装とテストの差異が見つかった場合は、Issue #20でテスト結果を記録し、必要に応じて本書とStage設計・テスト仕様を同期修正する。
