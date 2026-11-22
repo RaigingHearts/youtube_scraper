@@ -165,7 +165,7 @@ class ScrapeTaskProgressAndNotificationTests(unittest.TestCase):
         source = inspect.getsource(
             main.YouTubeCommentScraperApp._scrape_comments_task
         )
-        tree = ast.parse(source)
+        tree = ast.parse(textwrap.dedent(source))
         self.assertNotIn("tk_notifications", source)
         self.assertNotIn("wait_variable", source)
         self.assertNotIn("BooleanVar", source)
@@ -200,10 +200,15 @@ class ScrapeTaskSaveResultTests(unittest.TestCase):
             "fetch_all_comments",
             return_value=(self.fetch_result, 2, 5),
         ):
+            patch_kwargs = (
+                {"side_effect": save_side_effect}
+                if isinstance(save_side_effect, (list, tuple))
+                else {"return_value": save_side_effect}
+            )
             with patch.object(
                 main.json_data_handler,
                 "save_json_to_file",
-                side_effect=save_side_effect,
+                **patch_kwargs
             ) as save_file:
                 result = self.app._scrape_comments_task(
                     self.handle, "abcdefghijk"
