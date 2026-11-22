@@ -412,11 +412,14 @@ class YouTubeCommentScraperApp:
         elif fetch_status == "cancelled":
             with worker_handle.confirmation_lock:
                 cancel_reason = worker_handle.cancel_reason
-            cancel_message = (
-                "アプリケーション終了要求により取得を中断しました。"
-                if cancel_reason == "application_shutdown"
-                else "ユーザー操作により取得を中断しました。"
-            )
+            if cancel_reason == "application_shutdown":
+                cancel_message = "アプリケーション終了要求により取得を中断しました。"
+            elif cancel_reason == "continuation_declined":
+                cancel_message = "継続確認で中止が選択されたため、取得を中断しました。"
+            elif cancel_reason == "confirmation_unavailable":
+                cancel_message = "継続確認ダイアログを表示できなかったため、取得を中断しました。"
+            else:
+                cancel_message = "ユーザー操作により取得を中断しました。"
             notification = (
                 "warning",
                 "取得中断",
