@@ -4,6 +4,7 @@ GUI不要の単体テストを中心に、Tkイベントループを使う統合
 YouTube API通信・ファイル保存・モーダル表示は実行しない。
 """
 import queue
+import threading
 import tkinter as tk
 import unittest
 from unittest.mock import MagicMock, patch
