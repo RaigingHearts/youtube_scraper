@@ -447,6 +447,128 @@ class TkEventLoopIntegrationTests(unittest.TestCase):
         )
         self.assertTrue(app.gui_request_queue.empty())
 
+    def test_real_event_loop_processes_worker_requests_before_releasing_handle(self):
+        app = self._make_event_loop_app()
+        request_count = 55
+        requests_seen = []
+        finish_observations = []
+        update_thread_ids = []
+        notification_thread_ids = []
+        main_thread_id = threading.current_thread().ident
+        original_put = app.gui_request_queue.put
+        original_finish = app._finish_worker
+
+        def contains_tk_object(value):
+            if isinstance(value, tk.Misc):
+                return True
+            if isinstance(value, dict):
+                return any(
+                    contains_tk_object(key) or contains_tk_object(item)
+                    for key, item in value.items()
+                )
+            if isinstance(value, (list, tuple, set)):
+                return any(contains_tk_object(item) for item in value)
+            return False
+
+        def recording_put(item, *args, **kwargs):
+            if isinstance(item, tk_async_tasks.GuiRequest):
+                requests_seen.append(item)
+            return original_put(item, *args, **kwargs)
+
+        def fake_fetch_all_comments(
+            _api_key, _video_id, progress_callback, **_kwargs
+        ):
+            progress_callback(4, request_count, "worker progress")
+            return (
+                {
+                    "notifications": [
+                        {
+                            "kind": "warning",
+                            "title": "API notice {}".format(index),
+                            "message": "worker notice {}".format(index),
+                        }
+                        for index in range(request_count)
+                    ],
+                    "fetch_status": "failed",
+                    "video_info_raw_response": {},
+                    "channel_info_raw_response": {},
+                    "comment_threads_raw_responses": [],
+                    "comment_replies_raw_responses": [],
+                },
+                4,
+                request_count,
+            )
+
+        def record_update(*_args, **_kwargs):
+            update_thread_ids.append(threading.current_thread().ident)
+
+        def record_notification(*_args, **_kwargs):
+            notification_thread_ids.append(threading.current_thread().ident)
+
+        def observe_finish(handle):
+            finish_observations.append(
+                (
+                    app.gui_request_queue.qsize(),
+                    handle.done_event.is_set(),
+                    len(notification_thread_ids),
+                )
+            )
+            return original_finish(handle)
+
+        app.gui_request_queue.put = recording_put
+        app._schedule_gui_request_polling()
+        with patch.object(
+            main.youtube_utils, "is_valid_video_id", return_value=True
+        ):
+            with patch.object(
+                main.youtube_api_client,
+                "fetch_all_comments",
+                side_effect=fake_fetch_all_comments,
+            ):
+                with patch.object(
+                    main.tk_notifications,
+                    "show_warning",
+                    side_effect=record_notification,
+                ):
+                    with patch.object(
+                        tk_async_tasks,
+                        "_perform_gui_update",
+                        side_effect=record_update,
+                    ):
+                        with patch.object(
+                            app, "_finish_worker", side_effect=observe_finish
+                        ):
+                            self.root.after(0, app._start_scrape_process)
+                            self._run_event_loop_until(
+                                app, lambda: app.worker_handle is None
+                            )
+
+        self.assertEqual(len(requests_seen), request_count + 1)
+        self.assertEqual(
+            sum(request.kind == "progress" for request in requests_seen), 1
+        )
+        self.assertEqual(
+            sum(request.kind == "notification" for request in requests_seen),
+            request_count,
+        )
+        self.assertTrue(
+            all(not contains_tk_object(request.payload) for request in requests_seen),
+            "ワーカーから登録されたGUI要求payloadにTkinterオブジェクトが含まれています。",
+        )
+        self.assertEqual(len(notification_thread_ids), request_count)
+        self.assertTrue(
+            all(thread_id == main_thread_id for thread_id in notification_thread_ids)
+        )
+        self.assertTrue(update_thread_ids)
+        self.assertTrue(all(thread_id == main_thread_id for thread_id in update_thread_ids))
+        self.assertEqual(
+            finish_observations,
+            [(0, True, request_count)],
+            "未処理要求が残っている間にワーカー完了処理が実行されました。",
+        )
+        self.assertIsNone(app.worker_handle)
+        self.assertTrue(app.gui_request_queue.empty())
+
     def test_real_event_loop_collects_normal_and_exception_worker_completion(self):
         for should_raise in (False, True):
             with self.subTest(should_raise=should_raise):
