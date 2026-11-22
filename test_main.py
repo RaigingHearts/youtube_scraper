@@ -540,7 +540,9 @@ class TkEventLoopIntegrationTests(unittest.TestCase):
                         ):
                             self.root.after(0, app._start_scrape_process)
                             self._run_event_loop_until(
-                                app, lambda: app.worker_handle is None
+                                app,
+                                lambda: len(requests_seen) == request_count + 1
+                                and app.worker_handle is None,
                             )
 
         self.assertEqual(len(requests_seen), request_count + 1)
