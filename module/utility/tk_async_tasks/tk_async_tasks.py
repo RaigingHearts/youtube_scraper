@@ -41,6 +41,7 @@ class GuiRequest:
     response: Optional[bool] = None
     answered: bool = False
     response_reason: Optional[str] = None
+    display_started: bool = False
 
     def __post_init__(self):
         if self.kind == "confirmation" and self.response_event is None:
@@ -72,6 +73,7 @@ class WorkerHandle:
     save_policy: Optional[str] = None
     save_started: bool = False
     cancel_reason: Optional[str] = None
+    exception_notification_queued: bool = False
 
     def publish_progress(self, progress: Dict[str, Any]) -> None:
         """最新進捗を保持し、未登録の場合だけキューマーカーを追加する。"""
@@ -113,7 +115,10 @@ class WorkerHandle:
             if self.cancel_reason is None:
                 self.cancel_reason = "application_shutdown"
             for request in list(self.pending_confirmations.values()):
-                if request.answered:
+                # 表示開始前の要求だけを終了処理が解除する。
+                # 表示開始をLock内で確定した要求は、ダイアログ応答または
+                # 表示例外によってGUI側が完了させる。
+                if request.answered or request.display_started:
                     continue
                 request.response = False
                 request.response_reason = "application_shutdown"
