@@ -120,8 +120,10 @@ class WorkerHandle:
             self.shutdown_decision_event.clear()
             return "pending"
 
-    def resolve_shutdown_decision(self, save_policy: Optional[str]) -> bool:
-        """終了判断を確定し、ワーカーが未終了なら保存判断バリアを解放する。"""
+    def resolve_shutdown_decision(
+        self, save_policy: Optional[str], cancel: bool = False
+    ) -> bool:
+        """終了判断とキャンセルを確定してから、保存判断バリアを解放する。"""
         if save_policy not in (None, "save_partial", "skip_additional_save"):
             raise ValueError("unsupported save_policy: {}".format(save_policy))
         with self.shutdown_lock:
@@ -131,6 +133,9 @@ class WorkerHandle:
                 return False
             self.save_policy = save_policy
             self.shutdown_pending = False
+            if cancel:
+                # 保存待機ワーカーを起こす前にAPIキャンセルと確認要求解除を確定する。
+                self.cancel_for_shutdown()
             self.shutdown_decision_event.set()
             return True
 
