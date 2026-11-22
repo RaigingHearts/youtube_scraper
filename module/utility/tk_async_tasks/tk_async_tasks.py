@@ -8,39 +8,208 @@ Tkinterアプリケーション特化 / モジュールタイプ：ユーティ�
 
 メソッド構成:
 ├── "バックグラウンドタスクを実行し、GUIの進捗を更新する"
-│   └── "def run_task_in_thread(master_root, task_function, *args, **kwargs):"
+│   └── "def run_task_in_thread(task_function, gui_request_queue, *args, **kwargs):"
 ├── "GUIのプログレスバーとラベルを更新する（スレッドセーフな実処理）"
 │   └── "def update_progress_gui(master_root, progress_label, progress_bar, current_comments, total_comments):"
-├── "ユーザーに続行を確認するダイアログを表示する（スレッドセーフ）"
-│   └── "def confirm_continuation_gui(master_root, message):"
+├── "WorkerHandleが確認要求を登録し、要求固有のEventで応答を待つ"
+│   └── "def WorkerHandle.request_confirmation(message):"
 コピペ編集用罫線 '━┃┏┓┛┗┣┳┫┻╋' '─│┌┐┘└├┬┤┴┼'
 """
 # tk_async_tasks.py # コピーペースト作業での識別用。除去しないこと
 from __future__ import annotations
 
+import logging
+import queue
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
-from typing import Callable, Any
-# ログ出力のためにlogger_configをインポート
-import logging
+import uuid
+from dataclasses import dataclass, field
+from tkinter import ttk
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-def run_task_in_thread(master_root: tk.Tk, task_function: Callable, *args, **kwargs):
-    """
-    時間のかかるタスクを別スレッドで実行し、GUIをブロックしないようにする。
 
-    Args:
-        master_root (tk.Tk): Tkinterのルートウィンドウオブジェクト。
-        task_function (Callable): 別スレッドで実行する関数。
-        *args: task_functionに渡す位置引数。
-        **kwargs: task_functionに渡すキーワード引数。
+@dataclass
+class GuiRequest:
+    """ワーカーからメインスレッドへ渡すGUI要求。payloadにTkinterオブジェクトを含めない。"""
+
+    kind: str
+    payload: Dict[str, Any] = field(default_factory=dict)
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    response_event: Optional[threading.Event] = None
+    response: Optional[bool] = None
+    answered: bool = False
+    response_reason: Optional[str] = None
+    display_started: bool = False
+
+    def __post_init__(self):
+        if self.kind == "confirmation" and self.response_event is None:
+            self.response_event = threading.Event()
+
+
+@dataclass
+class WorkerHandle:
+    """一つのワーカー実行に関する状態・結果・同期オブジェクトを保持する。"""
+
+    gui_request_queue: queue.Queue
+    thread: Optional[threading.Thread] = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    done_event: threading.Event = field(default_factory=threading.Event)
+    result: Any = None
+    exception: Optional[BaseException] = None
+    partial_result: Dict[str, Any] = field(default_factory=lambda: {"saved_files": []})
+
+    progress_lock: threading.Lock = field(default_factory=threading.Lock)
+    latest_progress: Optional[Dict[str, Any]] = None
+    progress_marker_queued: bool = False
+
+    confirmation_lock: threading.Lock = field(default_factory=threading.Lock)
+    pending_confirmations: Dict[str, GuiRequest] = field(default_factory=dict)
+
+    shutdown_lock: threading.Lock = field(default_factory=threading.Lock)
+    shutdown_decision_event: threading.Event = field(default_factory=threading.Event)
+    shutdown_pending: bool = False
+    save_policy: Optional[str] = None
+    save_started: bool = False
+    cancel_reason: Optional[str] = None
+    exception_notification_queued: bool = False
+
+    def publish_progress(self, progress: Dict[str, Any]) -> None:
+        """最新進捗を保持し、未登録の場合だけキューマーカーを追加する。"""
+        with self.progress_lock:
+            self.latest_progress = progress
+            if not self.progress_marker_queued:
+                self.gui_request_queue.put(GuiRequest(kind="progress"))
+                self.progress_marker_queued = True
+
+    def take_latest_progress(self) -> Optional[Dict[str, Any]]:
+        """最新進捗を取得し、次のマーカー登録を許可する。"""
+        with self.progress_lock:
+            progress = self.latest_progress
+            self.progress_marker_queued = False
+            return progress
+
+    def request_confirmation(self, message: str) -> bool:
+        """GUIへ確認を要求し、要求固有のEventで回答を待つ。"""
+        request = GuiRequest(kind="confirmation", payload={"message": message})
+        with self.confirmation_lock:
+            if self.cancel_event.is_set():
+                return False
+            self.pending_confirmations[request.request_id] = request
+            try:
+                self.gui_request_queue.put(request)
+            except BaseException:
+                self.pending_confirmations.pop(request.request_id, None)
+                raise
+        try:
+            request.response_event.wait()
+            return bool(request.response)
+        finally:
+            with self.confirmation_lock:
+                self.pending_confirmations.pop(request.request_id, None)
+
+    def begin_shutdown_decision(self) -> str:
+        """保存開始との競合を調停し、終了判断待ち状態を設定する。"""
+        with self.shutdown_lock:
+            if self.done_event.is_set():
+                return "complete"
+            if self.save_started:
+                return "save_started"
+            self.shutdown_pending = True
+            self.shutdown_decision_event.clear()
+            return "pending"
+
+    def resolve_shutdown_decision(
+        self, save_policy: Optional[str], cancel: bool = False
+    ) -> bool:
+        """終了判断とキャンセルを確定してから、保存判断バリアを解放する。"""
+        if save_policy not in (None, "save_partial", "skip_additional_save"):
+            raise ValueError("unsupported save_policy: {}".format(save_policy))
+        with self.shutdown_lock:
+            if self.done_event.is_set():
+                self.shutdown_pending = False
+                self.shutdown_decision_event.set()
+                return False
+            self.save_policy = save_policy
+            self.shutdown_pending = False
+            if cancel:
+                # 保存待機ワーカーを起こす前にAPIキャンセルと確認要求解除を確定する。
+                self.cancel_for_shutdown()
+            self.shutdown_decision_event.set()
+            return True
+
+    def begin_save(self) -> bool:
+        """保存開始を終了判断と排他的に確定する。Falseなら追加保存を行わない。"""
+        while True:
+            with self.shutdown_lock:
+                if self.shutdown_pending:
+                    wait_for_decision = True
+                else:
+                    wait_for_decision = False
+                    if self.save_policy == "skip_additional_save":
+                        return False
+                    self.save_started = True
+                    return True
+            if wait_for_decision:
+                self.shutdown_decision_event.wait()
+
+    def cancel_for_shutdown(self) -> None:
+        """終了によるキャンセルを確定し、表示開始前の未回答確認要求をFalseで解除する。"""
+        with self.confirmation_lock:
+            if self.cancel_reason is None:
+                self.cancel_reason = "application_shutdown"
+            for request in list(self.pending_confirmations.values()):
+                # 表示開始前の要求だけを終了処理が解除する。
+                # 表示開始をLock内で確定した要求は、ダイアログ応答または
+                # 表示例外によってGUI側が完了させる。
+                if request.answered or request.display_started:
+                    continue
+                request.response = False
+                request.response_reason = "application_shutdown"
+                request.answered = True
+                request.response_event.set()
+            self.cancel_event.set()
+
+
+def run_task_in_thread(task_function: Callable, gui_request_queue, *args, **kwargs) -> WorkerHandle:
     """
-    logger.info(f"タスク '{task_function.__name__}' を別スレッドで開始します。")
-    thread = threading.Thread(target=task_function, args=args, kwargs=kwargs)
-    thread.daemon = True # メインスレッド終了時にサブスレッドも終了するように設定
-    thread.start()
+    ワーカーを起動し、実行状態・結果・例外を保持するWorkerHandleを返す。
+
+    run_task_in_thread(task_function, gui_request_queue, *args, **kwargs)
+    task_functionにはWorkerHandleを第1引数として渡す。
+    """
+    if not isinstance(gui_request_queue, queue.Queue):
+        raise TypeError("gui_request_queue must be an instance of queue.Queue")
+
+    actual_task_function = task_function
+    task_name = getattr(actual_task_function, "__name__", repr(actual_task_function))
+    handle = WorkerHandle(gui_request_queue=gui_request_queue)
+
+    def worker_wrapper():
+        try:
+            handle.result = actual_task_function(handle, *args, **kwargs)
+        except BaseException as exc:
+            handle.exception = exc
+            logger.exception("ワーカー '%s' の実行中に例外が発生しました。", task_name)
+        finally:
+            with handle.shutdown_lock:
+                handle.done_event.set()
+            logger.info("ワーカー '%s' が終了しました。", task_name)
+
+    thread = threading.Thread(target=worker_wrapper, name="youtube-scraper-worker")
+    thread.daemon = False
+    handle.thread = thread
+
+    logger.info("タスク '%s' を別スレッドで開始します。", task_name)
+    try:
+        thread.start()
+    except BaseException:
+        # 起動失敗はワーカー関数の例外終了として扱わず、呼び出し元へ伝播させる。
+        handle.done_event.set()
+        raise
+
+    return handle
 
 def update_progress_gui(master_root: tk.Tk, progress_label: ttk.Label, progress_bar: ttk.Progressbar, 
                         current_value: int, max_value: int | None = None, message: str | None = None):
@@ -87,97 +256,3 @@ def _perform_gui_update(progress_label: ttk.Label, progress_bar: ttk.Progressbar
         progress_label.config(text="準備完了")
 
 
-def confirm_continuation_gui(master_root: tk.Tk, message: str) -> bool:
-    """
-    ユーザーに続行を確認するダイアログを表示する（スレッドセーフ）。
-    別スレッドから呼び出された場合でも、GUIスレッドでダイアログを表示し、結果を待つ。
-
-    Args:
-        master_root (tk.Tk): Tkinterのルートウィンドウオブジェクト。
-        message (str): 確認ダイアログに表示するメッセージ。
-
-    Returns:
-        bool: ユーザーが「はい」を選択した場合はTrue、それ以外はFalse。
-    """
-    # Tkinterダイアログはメインスレッドで実行する必要があるため、
-    # BooleanVarとafter()、wait_variable()を組み合わせて同期的に結果を取得する。
-    result_var = tk.BooleanVar(master_root)
-    
-    def show_dialog():
-        answer = messagebox.askyesno("確認", message, parent=master_root)
-        result_var.set(answer)
-
-    master_root.after(0, show_dialog) # メインスレッドでダイアログを表示
-    master_root.wait_variable(result_var) # ダイアログの結果を待つ
-    
-    return result_var.get()
-
-# コピペ用メソッドコードの例 (使用例として)
-"""
-# モジュールのインポート設定
-import tk_async_tasks
-import logger_config
-import tkinter as tk
-from tkinter import ttk, messagebox
-
-class YourApplication:
-    def __init__(self, master):
-        self.master = master
-        # 進捗表示用のウィジェットを準備
-        self.progress_label = ttk.Label(master, text="準備完了")
-        self.progress_label.pack()
-        self.progress_bar = ttk.Progressbar(master, orient="horizontal", length=200, mode="determinate")
-        self.progress_bar.pack()
-        
-        ttk.Button(master, text="タスク開始", command=self._start_my_task).pack()
-
-    def _start_my_task(self):
-        # GUIを初期状態に戻す
-        tk_async_tasks.update_progress_gui(self.master, self.progress_label, self.progress_bar, 0, 0, "タスク開始中...")
-        
-        # 時間のかかるタスクを別スレッドで実行
-        tk_async_tasks.run_task_in_thread(
-            self.master, 
-            self._my_long_running_task, 
-            "arg1", "arg2", 
-            progress_callback=self._on_task_progress,
-            confirm_callback=self._on_task_confirm
-        )
-
-    def _my_long_running_task(self, param1, param2, progress_callback, confirm_callback):
-        # ここに時間のかかる処理を記述
-        logger.info(f"長時間タスク開始: {param1}, {param2}")
-        total_items = 100
-        for i in range(total_items):
-            # 処理の進捗をGUIに通知
-            progress_callback(i + 1, total_items, f"処理中... ({i+1}/{total_items})")
-            
-            # 例: APIクォータ制限に近づいた場合にユーザーに確認
-            if i == 50:
-                if not confirm_callback("50%完了しました。続行しますか？"):
-                    logger.info("ユーザーがタスクを中断しました。")
-                    break
-            
-            # 実際の処理（例: 時間のかかる計算やI/O）
-            import time
-            time.sleep(0.05)
-        
-        logger.info("長時間タスク完了。")
-        # 最終的なGUI更新（完了メッセージなど）
-        tk_async_tasks.update_progress_gui(self.master, self.progress_label, self.progress_bar, total_items, total_items, "タスク完了！")
-
-    def _on_task_progress(self, current, total, message):
-        # _my_long_running_taskから呼び出される進捗更新コールバック
-        tk_async_tasks.update_progress_gui(self.master, self.progress_label, self.progress_bar, current, total, message)
-
-    def _on_task_confirm(self, message):
-        # _my_long_running_taskから呼び出される確認コールバック
-        return tk_async_tasks.confirm_continuation_gui(self.master, message)
-
-# アプリケーション実行部分
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("非同期タスクテスト")
-    app = YourApplication(root)
-    root.mainloop()
-"""
