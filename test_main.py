@@ -526,24 +526,28 @@ class TkEventLoopIntegrationTests(unittest.TestCase):
                 side_effect=fake_fetch_all_comments,
             ):
                 with patch.object(
-                    main.tk_notifications,
-                    "show_warning",
-                    side_effect=record_notification,
-                ):
+                    main.json_data_handler, "save_json_to_file"
+                ) as save_json:
                     with patch.object(
-                        tk_async_tasks,
-                        "_perform_gui_update",
-                        side_effect=record_update,
+                        main.tk_notifications,
+                        "show_warning",
+                        side_effect=record_notification,
                     ):
                         with patch.object(
-                            app, "_finish_worker", side_effect=observe_finish
+                            tk_async_tasks,
+                            "_perform_gui_update",
+                            side_effect=record_update,
                         ):
-                            self.root.after(0, app._start_scrape_process)
-                            self._run_event_loop_until(
-                                app,
-                                lambda: len(requests_seen) == request_count + 1
-                                and app.worker_handle is None,
-                            )
+                            with patch.object(
+                                app, "_finish_worker", side_effect=observe_finish
+                            ):
+                                self.root.after(0, app._start_scrape_process)
+                                self._run_event_loop_until(
+                                    app,
+                                    lambda: len(requests_seen) == request_count + 1
+                                    and app.worker_handle is None,
+                                )
+                    save_json.assert_not_called()
 
         self.assertEqual(len(requests_seen), request_count + 1)
         self.assertEqual(
