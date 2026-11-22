@@ -30,8 +30,11 @@ Stage 1～4で導入・移行した機能を組み合わせ、個別Stageでは�
 ## 5. Stage 3統合シナリオ
 
 - 継続確認Trueで取得継続、Falseで中止し、応答Eventが確実に解除されること。
-- 確認要求が複数ある場合にEvent・応答が混線しないこと。
+- 確認要求が複数ある場合にEvent・応答が混線せず、pending_confirmationsへの登録・解除に漏れがないこと。
+- 利用者のTrue/False回答ではresponse_reason=user_response、Falseの場合のみcancel_reason=continuation_declinedとなること。終了解除・表示不能では各々application_shutdown・confirmation_unavailableがresponse_reasonとcancel_reasonへ正しく反映されること。
+- モーダルダイアログ表示中にポーリングが再入しても新しいダイアログを開かず、保留した通知・確認要求をFIFOで処理すること。
 - APIクライアントがGUIを操作せず、戻り値・エラー情報を呼び出し元へ返すこと。
+- 従来通知対象だったAPIエラーだけが適切な種別で一度通知され、従来ログのみだった事象が通知に昇格しないこと。
 - APIエラー、確認ダイアログ例外、確認待機中の状態を組み合わせても二重通知・待機残りがないこと。
 
 ## 6. Stage 4統合シナリオ
