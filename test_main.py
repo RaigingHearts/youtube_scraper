@@ -280,6 +280,61 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
         update.assert_called()
         show_error.assert_called_once()
 
+    def test_new_worker_can_start_after_previous_start_failure(self):
+        app = self.make_app()
+        app.api_key = "test-key"
+        app.video_id_entry = MagicMock()
+        app.video_id_entry.get.return_value = "abcdefghijk"
+
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(
+                tk_async_tasks, "run_task_in_thread",
+                side_effect=RuntimeError("thread start failed"),
+            ):
+                with patch.object(main.tk_notifications, "show_error"):
+                    with patch.object(tk_async_tasks, "_perform_gui_update"):
+                        app._start_scrape_process()
+
+        self.assertIsNone(app.worker_handle)
+
+        next_handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(
+                tk_async_tasks, "run_task_in_thread", return_value=next_handle
+            ) as run_task:
+                with patch.object(tk_async_tasks, "_perform_gui_update"):
+                    app._start_scrape_process()
+
+        run_task.assert_called_once_with(
+            app._scrape_comments_task, app.gui_request_queue, "abcdefghijk"
+        )
+        self.assertIs(app.worker_handle, next_handle)
+
+    def test_worker_exception_is_recovered_after_error_notification(self):
+        app = self.make_app()
+        handle = self.make_finished_handle(
+            app, exception=RuntimeError("worker failed")
+        )
+
+        app._finish_worker(handle)
+        self.assertIs(app.worker_handle, handle)
+        request = app.gui_request_queue.get_nowait()
+        self.assertEqual(request.kind, "notification")
+
+        with self.assertLogs(main.logger, level="ERROR"):
+            with patch.object(
+                main.tk_notifications, "show_error",
+                side_effect=RuntimeError("dialog failed"),
+            ):
+                app._show_modal_request(request)
+
+        self.assertFalse(app._dialog_active)
+        app._finish_worker(handle)
+
+        self.assertIsNone(app.worker_handle)
+        app.scrape_button.config.assert_called_once_with(state=tk.NORMAL)
+        app.open_json_button.config.assert_called_once_with(state=tk.DISABLED)
+
 
 class TkEventLoopIntegrationTests(unittest.TestCase):
     @classmethod
