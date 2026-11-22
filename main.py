@@ -909,7 +909,10 @@ class YouTubeCommentScraperApp:
                 if total_expected is not None
                 else "取得コメント数: {} / 確定待ち".format(fetched_count)
             )
-            self.comment_count_label.config(text=count_text)
+            try:
+                self.comment_count_label.config(text=count_text)
+            except Exception:
+                logger.exception("取得件数表示の復旧に失敗しました。")
 
         # 例外通知は上でGUI要求キューへ登録済み。ここでは結果回収とGUI復旧だけを行う。
         try:
