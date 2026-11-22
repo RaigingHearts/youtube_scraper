@@ -66,3 +66,16 @@ Issue #10の進捗件数推定・超過問題など、Issue #3の対象外機能
 - 既存回帰テストが成功している。
 - 実デスクトップ環境で受け入れ確認を行い、API通信中もGUIが応答し、終了時にワーカー待機やEvent待機が残らない。
 - 未解決事項、実行できなかったテスト、環境制約を明記し、未実施を合格として扱わない。
+
+
+## 9. Stage 3実装に基づく追加確認事項（Issue #20引き継ぎ）
+
+既存のStage 3統合シナリオに加え、実装コードとの対応を確認する。
+
+- youtube_api_client.py の通知依存除去に伴い、既存テストの tk_notifications patchを更新し、result_data["notifications"] の分類レコードを検証する。
+- 通知レコードの stage/kind/title/message、従来の利用者向け通知対象、ログのみの事象、commentsDisabledの専用warningを区別する。
+- fetch_all_comments() の3要素タプル、既存 fetch_status、取得結果、取得件数の互換性を確認する。
+- 終了処理と確認回答の競合では、先に確定したresponseとresponse_reasonを保持し、後から確定した終了理由はcancel_reasonへ別途記録する。
+- 終了後にFIFO保留列へ残った古い確認要求がダイアログ表示されず、Event待機が残らないことを確認する。
+
+これらはIssue #20で実装・実行する検証項目であり、現時点で合格済みではない。
