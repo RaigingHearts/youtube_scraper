@@ -5,7 +5,7 @@
 
 - キャンセル選択でshutdown_pendingを解除し、判断Eventを設定し、cancel_eventを設定せず通常処理へ戻る。終了確認中にFIFOへ退避した通知・確認要求は破棄せず、元の順序で通常のモーダル処理へ戻す。
 - はい・いいえでは保存方針を確定し、cancel_reason=application_shutdownを未設定時に先に確定してからcancel_eventを設定する。未回答かつdisplay_started=Falseの確認要求をresponse_reason=application_shutdownでFalse解除する。display_started=Trueの要求は終了処理が回答を上書きせず、表示中ダイアログの回答または表示例外で解除されることを確認する。
-- 終了確認中もTkイベントループとワーカー監視が継続する。
+- 終了確認中もTkイベントループとワーカー監視が継続する。終了要求が既存の確認・通知ダイアログ中に発生した場合は現在のダイアログ終了後に開始し、モーダルを重ねて表示しない。
 
 ## 2. 保存判断バリアと競合
 終了確認表示前にshutdown_pendingが設定され、ワーカーが保存開始前に判断Eventを待つことを確認する。ロックを保持したままEvent待機しないことを確認する。
