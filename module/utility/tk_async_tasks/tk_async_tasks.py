@@ -8,7 +8,7 @@ Tkinterアプリケーション特化 / モジュールタイプ：ユーティ�
 
 メソッド構成:
 ├── "バックグラウンドタスクを実行し、GUIの進捗を更新する"
-│   └── "def run_task_in_thread(master_root, task_function, *args, **kwargs):"
+│   └── "def run_task_in_thread(task_function, gui_request_queue, *args, **kwargs):"
 ├── "GUIのプログレスバーとラベルを更新する（スレッドセーフな実処理）"
 │   └── "def update_progress_gui(master_root, progress_label, progress_bar, current_comments, total_comments):"
 ├── "WorkerHandleが確認要求を登録し、要求固有のEventで応答を待つ"

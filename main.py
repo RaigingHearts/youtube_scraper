@@ -507,6 +507,9 @@ class YouTubeCommentScraperApp:
         """確認応答を一度だけ確定し、要求固有Eventを解除する。"""
         handle = self.worker_handle
         if handle is None:
+            # 終了処理が先に応答を確定していた場合、遅延したダイアログ応答で上書きしない。
+            if request.answered:
+                return
             if request.response_event is not None:
                 request.response = False
                 request.response_reason = "confirmation_unavailable"
