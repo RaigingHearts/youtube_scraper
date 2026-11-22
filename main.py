@@ -648,7 +648,10 @@ class YouTubeCommentScraperApp:
             return
 
         if request.kind == "notification":
-            if self._shutdown_state in ("shutdown_pending", "stopping", "complete"):
+            if self._shutdown_state == "shutdown_pending":
+                self._pending_modal_requests.append(request)
+                return
+            if self._shutdown_state in ("stopping", "complete"):
                 self._shutdown_notifications.append(request.payload)
                 return
             if self._dialog_active:
