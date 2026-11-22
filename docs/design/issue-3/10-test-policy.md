@@ -95,11 +95,11 @@ Issue #3のStage 1～4の実装作業中は、各Stageの新規テスト仕様�
 
 - Stage 3アプリケーションコード：実装・追加修正・静的整合性確認済み（Stage 3実装記録更新時点のブランチ先頭 f566ad4f92ca3a3bb1f273c02cdf7ebb01a1b992）。
 - Stage 3実装後レビューで確認したワーカー例外通知のモーダル直列化、確認表示開始と終了処理の競合、APIサービス構築失敗通知の例外概要を修正済み。
-- Stage 3後の既存回帰テスト：実行結果未報告。Stage 4作業中の後続コミットはStage 3の再検証結果を意味しない。
+- Stage 3後の既存回帰テスト：コミット 40a05f0（2026-11-22、Windows／Python 3.8.10）で実行済み。対象APIクライアントテストは 21 passed（1.38s）、リポジトリ全体は 50 passed（1.88s）。実行主体：利用者報告。
 - Stage 3専用新規テストコード：未実装（Issue #20へ引き継ぐ）。
 - GUI統合テスト・実デスクトップ受入確認：未実施。
 
-既存の module/utility/youtube_api_client/test_youtube_api_client.py は、現行APIクライアントから削除された youtube_api_client.tk_notifications をpatchしている。Issue #20で通知返却契約に合わせて修正する必要がある。Stage 2後の既存50テスト成功記録は、Stage 3後の回帰確認として流用しない。
+既存の module/utility/youtube_api_client/test_youtube_api_client.py は、独立レビュー対応の緊急修復としてコミット 40a05f0 で更新済みである。削除済みの youtube_api_client.tk_notifications へのpatchを撤去し、result_data["notifications"] の内容・種別・件数を検証する形に修正した。対象APIクライアントテスト21件とリポジトリ全体の既存回帰テスト50件が同コミットで成功している。これは既存回帰テストの修復・実行結果であり、Issue #20で実装するStage 1～4の新規テストコードやGUI統合テストの完了を意味しない。
 
 ### 6.3 Stage 4実装後のテスト状況（2026-11-22）
 
