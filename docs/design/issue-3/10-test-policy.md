@@ -154,6 +154,6 @@ Issue #3のStage 1～4の実装作業中は、各Stageの新規テスト仕様�
 - `python -m unittest discover -v`：91 tests、1.556秒、`OK`
 - `git diff --check`：エラーなし。ローカルブランチとorigin追跡ブランチは対象コミットで同期。未追跡ファイル `issue3-comment.md` は維持。
 - 統合テストでは実Tkイベントループと実ワーカー経路を使用し、YouTube APIと `json_data_handler.save_json_to_file` をモック化した。進捗1件・通知55件のGUI要求、payload内のTkinterオブジェクト不在、メインスレッドでのGUI更新・通知表示、未処理要求がなくなってからのWorkerHandle解放を確認した。保存関数は `assert_not_called()` により未呼出を検証した。
-- Stage 1テスト用2ファイルは計41テストケース（`test_tk_async_tasks.py` 16件、`test_main.py` 25件）。全体91件には既存回帰テスト50件を含む。なお `test_main.py` のうち2テストにはStage 2の取得結果・保存結果GUI反映に関する補助的なクロスStage回帰確認が含まれるが、Stage 1の合否条件やStage 2新規テスト群の完了には算入しない（Stage 1仕様 §6参照）。
+- Stage 1テスト用2ファイルは計41テストケース（`test_tk_async_tasks.py` 16件、`test_main.py` 25件）。全体91件には既存回帰テスト50件を含む。なお `test_main.py` のうち3テストにはStage 2の進捗・通知の実処理接続または取得結果・保存結果GUI反映に関する補助的なクロスStage回帰確認が含まれる。このうち実イベントループ統合テストはStage 1のキュー処理・完了順序も検証する。Stage 2側のアサーションはStage 1の合否条件やStage 2新規テスト群の完了には算入しない（Stage 1仕様 §6参照）。
 - 例外・警告ログは異常系テストによる想定出力であり、全件成功。
 - 本結果はStage 1テスト群の最終再実行結果である。Stage 2～4専用新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認は未完了であり、別工程で実施する。
