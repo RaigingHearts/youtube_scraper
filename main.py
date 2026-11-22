@@ -318,9 +318,13 @@ class YouTubeCommentScraperApp:
         comments_saved = False
         replies_saved = False
 
+        channel_id = None
+        if channel_info_raw_response and channel_info_raw_response.get("items"):
+            channel_id = channel_info_raw_response["items"][0].get("id")
+
         has_save_data = bool(
             video_info_raw_response
-            or (channel_info_raw_response and channel_info_raw_response.get("items"))
+            or channel_id
             or comment_threads_raw_responses
             or comment_replies_raw_responses
         )
@@ -330,10 +334,6 @@ class YouTubeCommentScraperApp:
             video_info_saved = save_file(
                 "video_info", video_info_raw_response, video_info_filename
             )
-
-        channel_id = None
-        if channel_info_raw_response and channel_info_raw_response.get("items"):
-            channel_id = channel_info_raw_response["items"][0].get("id")
 
         if channel_id:
             if save_allowed:
