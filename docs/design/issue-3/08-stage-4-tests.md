@@ -4,7 +4,7 @@
 ワーカー不在時は即時終了。実行中は終了確認を一度だけ表示する。running、confirming、shutdown_pending、stopping、complete、closedの各状態と許可される遷移を確認する。終了確認の重複要求でダイアログや完了処理が重複しないことを確認する。
 
 - キャンセル選択でshutdown_pendingを解除し、判断Eventを設定し、cancel_eventを設定せず通常処理へ戻る。
-- はい・いいえでは保存方針を確定し、cancel_reason=application_shutdownを未設定時に先に確定してからcancel_eventを設定する。未回答確認要求のFalse解除にもresponse_reason=application_shutdownを付ける。
+- はい・いいえでは保存方針を確定し、cancel_reason=application_shutdownを未設定時に先に確定してからcancel_eventを設定する。未回答かつdisplay_started=Falseの確認要求をresponse_reason=application_shutdownでFalse解除する。display_started=Trueの要求は終了処理が回答を上書きせず、表示中ダイアログの回答または表示例外で解除されることを確認する。
 - 終了確認中もTkイベントループとワーカー監視が継続する。
 
 ## 2. 保存判断バリアと競合
