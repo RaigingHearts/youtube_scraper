@@ -898,6 +898,8 @@ class YouTubeCommentScraperApp:
                 maximum,
                 "コメント取得処理終了",
             )
+        except Exception:
+            logger.exception("ワーカー完了後のGUI状態復旧に失敗しました。")
         finally:
             self.worker_handle = None
 
