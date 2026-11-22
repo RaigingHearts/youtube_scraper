@@ -116,7 +116,7 @@ Stage 2の実装完了は、アプリケーションコードの移行、設計�
 
 新規Stage 2テストコードの実装・実行、およびStage 1～4との統合検証は、合意済みの作業分担に従い、Stage 1～4のアプリケーション改修完了後にIssue #20で実施する。したがってIssue #20での新規テスト検証完了はStage 2の実装完了条件とは分けて管理し、未実施のテストを実施済みとして扱わない。
 
-なお、Stage 1テスト作業ブランチの `test_main.py` には、`test_finish_worker_restores_widgets_and_saved_file_paths` および `test_finish_worker_keeps_json_button_disabled_without_saved_files` に、取得結果・保存結果のGUI反映を確認する補助的なクロスStage回帰アサーションが含まれる。これはStage 2 §6・§7の一部動作を先行して確認するものであり、Stage 2専用テスト群の実装・実行やStage 2テスト検証完了を意味しない。Stage 2では本書の期待条件に沿って、結果受け渡し・保存部分失敗・GUI反映を独立して網羅する。
+なお、Stage 1テスト作業ブランチの `test_main.py` には、`test_finish_worker_restores_widgets_and_saved_file_paths`、`test_finish_worker_keeps_json_button_disabled_without_saved_files`、`test_real_event_loop_processes_worker_requests_before_releasing_handle` に、Stage 2の進捗・通知の実処理接続または取得結果・保存結果のGUI反映を確認する補助的なクロスStage回帰アサーションが含まれる。最後の実イベントループ統合テストはStage 1のキュー処理・完了順序も検証する。これらはStage 2の一部動作を先行して確認するものであり、Stage 2専用テスト群の実装・実行やStage 2テスト検証完了を意味しない。Stage 2では本書の期待条件に沿って、進捗・通知の発生元と順序、結果受け渡し・保存部分失敗・GUI反映を独立して網羅する。
 
 ## 10. 未確定事項・実装時の照合
 
