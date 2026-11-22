@@ -45,3 +45,22 @@ Stage 3のアプリケーションコード実装をブランチ feature/issue-3
 ### 実装後の検証状態
 
 この記録時点で、Stage 3専用の新規テストコード、GUI統合テスト、実デスクトップ受入確認は未実施である。既存回帰テストのStage 3実装後の実行結果も未報告であり、Stage 2後の50件成功記録をStage 3の検証結果として扱わない。既存テストのうち module/utility/youtube_api_client/test_youtube_api_client.py は、削除済みの youtube_api_client.tk_notifications を複数箇所でpatchしているため、Issue #20で新しい通知返却契約に合わせたテスト修正が必要である。
+
+
+## 10. Issue #20 Stage 3テスト検証記録（2026-11-23）
+
+Stage 3専用テストの実装・実行結果を記録する。実行主体は利用者報告。
+
+- ブランチ：`feature/issue-20-stage-1-tests`
+- テスト実装コミット：`b2cdf9f`、`b367ca2`、`7627305`、`562c3f0`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`
+- `python -m unittest test_stage3 -v`：24 tests、0.145秒、`OK`
+- `python -m unittest test_main -v`：25 tests、0.768秒、`OK`
+- `python -m unittest discover -v`：135 tests、2.198秒、`OK`
+- `git diff --check`：エラーなし。ローカルブランチとorigin追跡ブランチは `562c3f0` で同期。未追跡ファイル `issue3-comment.md` は維持。
+
+Stage 3専用テストでは、確認要求のEventライフサイクル、終了・回答競合、モーダル要求のFIFO直列化と表示例外後の復旧、APIクライアントのGUI非依存性、通知分類・重複防止、継続確認のタスクへの引き渡しを検証した。追加した2件により、`application_shutdown` と `confirmation_unavailable` が `_scrape_comments_task()` のキャンセル結果 `fetch_result["cancel_reason"]` まで伝達されることも確認した。
+
+全体135件はStage 1～3の新規テストと既存テストを含む統合探索結果であり、各専用テスト件数との単純合算はしない。実YouTube API通信は行っていない。ログに出力された例外・警告は異常系テストによる想定出力であり、全テストが成功した。
+
+**未実施・後続への引き継ぎ：** Stage 3の確認継続・確認ダイアログとモーダルFIFOを、実Tkイベントループ上で組み合わせた専用統合テストは今回のStage 3テスト群では実施していない。Stage 1・2で実施済みの実TkイベントループテストをもってStage 3のGUI統合検証済みとはしない。この項目はStage 1～4の全体統合検証で実施し、結果を別途記録する。実デスクトップ受け入れ確認も全体工程に残す。
