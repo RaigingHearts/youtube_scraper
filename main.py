@@ -329,6 +329,13 @@ class YouTubeCommentScraperApp:
             or comment_replies_raw_responses
         )
         save_allowed = worker_handle.begin_save() if has_save_data else False
+        with worker_handle.shutdown_lock:
+            save_policy = worker_handle.save_policy
+        shutdown_save_skipped = (
+            has_save_data
+            and not save_allowed
+            and save_policy == "skip_additional_save"
+        )
 
         if save_allowed and video_info_raw_response:
             video_info_saved = save_file(
@@ -382,6 +389,8 @@ class YouTubeCommentScraperApp:
             if message_parts
             else "保存できたファイルはありません。"
         )
+        if shutdown_save_skipped:
+            saved_summary += "\nアプリケーション終了要求により追加保存は行っていません。"
         failed_records = [record for record in saved_files if not record["success"]]
         failure_summary = ""
         if failed_records:
@@ -408,8 +417,6 @@ class YouTubeCommentScraperApp:
                 if cancel_reason == "application_shutdown"
                 else "ユーザー操作により取得を中断しました。"
             )
-            if not save_allowed and has_save_data:
-                cancel_message += "\n追加保存は行っていません。"
             notification = (
                 "warning",
                 "取得中断",
