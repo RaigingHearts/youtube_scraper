@@ -23,3 +23,20 @@ Trueで後続取得、Falseで中止、部分取得データの保持、上限�
 
 ## 8. 完了条件
 Python 3.8.10環境で、Event確認の正常・異常・競合系とAPIクライアントのGUI非依存性を検証できること。
+
+
+## 9. 実装反映後のIssue #20引き継ぎ事項（2026-11-22）
+
+Stage 3の実装では、APIクライアントの通知情報は result_data["notifications"] に格納される。各通知レコードは stage、kind、title、message を持つ。既存の fetch_all_comments() の3要素タプルは維持される。
+
+既存の module/utility/youtube_api_client/test_youtube_api_client.py は youtube_api_client.tk_notifications をpatchするテストを含むが、実装モジュールから同属性は削除された。Issue #20では、これらのpatchを撤去し、返却される notifications の内容・種別・件数を検証するテストへ更新する。既存テストの期待値を機械的に置き換えるのではなく、従来通知対象とログのみの事象の区別、重複通知防止、戻り値・取得結果の互換性を確認する。
+
+追加する主な検証対象：
+- WorkerHandleの確認要求登録とキュー投入の同期、要求ごとのEvent独立性、Event解除後の登録解除。
+- True/False回答、ダイアログ表示例外、アプリ終了による未回答要求解除、および回答確定と終了処理の競合。
+- True回答確定後に終了要求が発生した場合、response=True／response_reason=user_responseを維持し、未設定のcancel_reasonにはapplication_shutdownを設定すること。
+- モーダルダイアログ表示中のポーリング再入、FIFO保留、表示例外後のフラグ解除、終了後の古い確認要求の抑止。
+- APIクライアントのTkinter非依存、通知分類（error／warning）、commentsDisabledの一度限りの通知、従来ログのみだった事象を通知へ昇格させないこと。
+- fetch_status、result_data、3要素タプル、取得件数の既存契約とキャンセル理由の伝達。
+
+本書のテスト仕様は期待動作の定義であり、上記テストが実装・実行済みであることを意味しない。テストコードの実装と検証はIssue #20で行う。
