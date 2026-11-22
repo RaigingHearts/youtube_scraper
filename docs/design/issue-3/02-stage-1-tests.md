@@ -135,15 +135,16 @@ GUI不要の単体テストと実Tkイベントループを使う統合テスト
 - `publish_progress()`／`take_latest_progress()` は実装されているが、現行の取得処理からの利用はStage 2で移行する。
 - confirmation要求はStage 1ではFalseで解除する仮実装であり、利用者に確認する本来のEvent応答処理はStage 3の対象である。
 - `_scrape_comments_task()` に残る旧方式のTkinter操作とGUI所有属性の更新は、Stage 1の合否条件に含めず、Stage 2・3の移行対象として追跡する。
-- 起動失敗時、`_start_scrape_process()` は取得ボタンと進捗表示を復旧する。保存先パスは起動前にすべて `None` へクリアされているため、`open_json_button` は `tk.DISABLED` のままとする。以前の `fe6c0197a8f95bb4fc9acab357969ae23edafe56` では無条件に再有効化していたが、独立レビュー指摘2を受けて修正する。起動失敗時のボタン状態を直接検証するテストはIssue #20で実装する。
+- 起動失敗時、`_start_scrape_process()` は取得ボタンと進捗表示を復旧する。保存先パスは起動前にすべて `None` へクリアされているため、`open_json_button` は `tk.DISABLED` のままとする。以前の `fe6c0197a8f95bb4fc9acab357969ae23edafe56` では無条件に再有効化していたが、独立レビュー指摘2を受けて修正済み。起動失敗時のボタン状態は `WorkerLifecycleTests.test_start_failure_restores_gui_and_keeps_json_button_disabled` および実Tkイベントループを使う `TkEventLoopIntegrationTests.test_real_event_loop_recovers_gui_after_thread_start_failure` で直接検証する。
 - Stage 1ではワーカー関数の戻り値を `WorkerHandle.result` に保持することを責務とする。`_finish_worker()` による取得結果のGUI所有状態への反映はStage 1の完了条件に含めない。取得タスクの構造化結果をGUI側で回収し、画面状態へ反映する処理はStage 2で実装・検証する。
 
 ## 9. テスト実施状況と完了条件
 
-- 2026-11-22、利用者報告では既存テストについて `python -m unittest discover -v` が50件成功、`python -m pytest -v` が50件成功（pytest 8.3.5）。
-- 上記は既存回帰テストの結果であり、Stage 1で追加したWorkerHandle・GUI要求キュー等の新規機能を直接検証した結果ではない。
-- 本仕様に対応する新規テストコードは未作成・未実行であり、Issue #20で整備する。
-- Stage 1の完了判定は、本書の対象範囲のテストがIssue #20で実装・実行され、既知の差異が解消または明示的に合意された後に行う。
+- 既存回帰テスト50件の実行記録は§9.1～§9.3および `10-test-policy.md` §6.1～§6.4を参照する。以下の新規テスト実行結果とは区別する。
+- Stage 1の新規テストコードはIssue #20で実装済みであり、単体テスト、ワーカーライフサイクル、GUIポーリング、実Tkイベントループ統合テストを含む。
+- 2026-11-22に利用者環境で新規テストを含む全テストを実行し、追加統合テスト1件、`test_main` 25件、全体91件がすべて成功した（詳細は§9.4）。
+- §9.4記録後に、実統合テスト内でファイル保存関数が呼ばれないことを明示的に検証するガードを追加した（コミット `ccb2bc0598431d9231038871d0264562045d8cc7`）。この追加変更は§9.4の実行結果には含まれないため、同期後の再実行をもって最終確認とする。
+- Stage 1のテスト範囲は仕様§3～§7と照合済み。confirmationの最終Event応答・FIFO・終了時解除はStage 3、非daemonワーカー・終了協調はStage 4の検証範囲とし、Stage 1の完了条件へ混在させない。
 
 実行環境の共通条件は `13-test-environment.md`、テスト全体の方針は `10-test-policy.md`、共通契約は `11-common-test-spec.md` を参照する。
 
@@ -176,3 +177,21 @@ GUI不要の単体テストと実Tkイベントループを使う統合テスト
 - 指摘2：ワーカー起動失敗時に保存先パスはすべて `None` であるため、`open_json_button` を無条件に有効化せず、無効状態を維持する実装へ修正する。起動失敗時のGUI状態を直接検証するテストはIssue #20で追加する。
 - 指摘3：実装コード全体の呼び出し元調査では、`run_task_in_thread()` の呼び出しは `main.py` の1箇所のみであり、新方式へ移行済みであることを確認した。旧方式互換経路を現行仕様として要求していた記述を廃止確認のテスト仕様へ改める。
 - この記録は実装・仕様の修正を示すものであり、テストコードの追加・実行を示さない。
+
+
+### 9.4 Stage 1新規テスト・GUI統合テストの実行結果（2026-11-22）
+
+利用者提供の実行ログに基づく記録。実行対象はファイル保存ガード追加前のコミットであり、ガード追加後の再実行は未確認。
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`46c653cb522a70d62db08ecedd3a1d002850a788`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`、Tkイベントループ利用可能
+- 追加した実イベントループ統合テスト：`python -m unittest test_main.TkEventLoopIntegrationTests.test_real_event_loop_processes_worker_requests_before_releasing_handle -v` — 1 test、0.305秒、`OK`
+- `python -m unittest test_main -v` — 25 tests、0.828秒、`OK`
+- `python -m unittest discover -v` — 91 tests、1.615秒、`OK`
+- `git diff --check` — エラーなし
+- `git status -sb` — ローカルブランチとorigin追跡ブランチは同期。既存の未追跡ファイル `issue3-comment.md` は維持。
+- 追加統合テストは実Tkイベントループと実際のワーカー起動経路を使用し、YouTube API通信はモック化した。進捗1件と通知55件の登録、payload内にTkinterオブジェクトがないこと、GUI操作がメインスレッドで実行されること、通知55件を処理してキューが空になった後にWorkerHandleが解放されることを確認した。
+- テストログに出た例外・警告は異常系テストが意図的に発生させたもので、各テストは成功している。
+- この実行結果はStage 1テスト範囲の検証結果であり、Stage 2～4の新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認の完了を意味しない。
