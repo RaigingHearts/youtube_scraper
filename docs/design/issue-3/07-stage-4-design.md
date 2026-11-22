@@ -9,7 +9,7 @@ WorkerHandle.cancel_eventを利用し、ワーカーを強制終了しない。A
 動画情報・チャンネル情報・コメントスレッド・返信コメントの各APIリクエスト前後、親コメントや返信ページの処理境界、ページ間待機の前後、次のAPIリクエスト開始前、保存開始前に確認する。API呼び出しの直前だけでなく直後にも確認し、取得済みレスポンスの処理を失わない。ページ間待機はcancel_event.wait(0.1)を利用し、待機中のキャンセルを検出する。
 
 ## 3. APIクライアントへの伝達
-fetch_all_comments()へcancel_eventを渡す。APIクライアントはEventだけを確認し、TkinterやWorkerHandleを参照しない。キャンセル検出後は後続API要求を開始せず、取得済みresult_dataを保持して戻る。既存fetch_status="cancelled"を再利用し、返却タプルを維持する。継続確認による中止とアプリ終了による中止はcancel_reasonで区別する。
+fetch_all_comments()へ任意引数cancel_eventを渡す。省略時は従来どおりキャンセルなしで動作させ、既存呼び出し元との互換性を保つ。APIクライアントはEventだけを確認し、TkinterやWorkerHandleを参照しない。キャンセル検出後は後続API要求を開始せず、取得済みresult_dataを保持して戻る。既存fetch_status="cancelled"を再利用し、返却タプルを維持する。継続確認による中止とアプリ終了による中止はcancel_reasonで区別する。
 
 ## 4. 終了状態
 終了制御は次の状態を使用する。
