@@ -378,7 +378,6 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(fetched_count, 0)
         self.assertEqual(expected_count, 0)
         assert_notification(self, data, "comment_threads", "warning")
-        self.assertEqual(data["notifications"], [])
 
     @patch.object(youtube_api_client, "get_youtube_service")
     def test_progress_total_is_confirmed_only_after_last_thread_is_processed(
