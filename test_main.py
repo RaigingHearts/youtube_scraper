@@ -381,5 +381,144 @@ class TkEventLoopIntegrationTests(unittest.TestCase):
             app._gui_poll_after_id = None
 
 
+    def _run_event_loop_until(self, app, predicate, timeout_ms=3000):
+        """実Tkイベントループを回し、条件成立またはタイムアウトで終了する。"""
+        state = {"check_id": None, "timeout_id": None, "timed_out": False}
+
+        def check_condition():
+            if predicate():
+                self.root.quit()
+                return
+            state["check_id"] = self.root.after(10, check_condition)
+
+        def timeout():
+            state["timed_out"] = True
+            self.root.quit()
+
+        state["check_id"] = self.root.after(0, check_condition)
+        state["timeout_id"] = self.root.after(timeout_ms, timeout)
+        self.root.mainloop()
+
+        for after_id in (state["check_id"], state["timeout_id"],
+                         app._gui_poll_after_id):
+            if after_id is not None:
+                try:
+                    self.root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+        app._gui_poll_after_id = None
+        self.assertFalse(state["timed_out"], "Tkイベントループがタイムアウトしました。")
+        self.assertTrue(predicate(), "終了条件が成立していません。")
+
+    def _make_event_loop_app(self):
+        app = YouTubeCommentScraperAppTestCase().make_app()
+        app.master = self.root
+        app.api_key = "test-key"
+        app.video_id_entry = MagicMock()
+        app.video_id_entry.get.return_value = "abcdefghijk"
+        return app
+
+    def test_real_event_loop_drains_more_than_50_requests_after_notification_error(self):
+        app = self._make_event_loop_app()
+        app.gui_request_queue.put(
+            tk_async_tasks.GuiRequest(
+                kind="notification",
+                payload={
+                    "kind": "info",
+                    "title": "first",
+                    "message": "dialog failure",
+                },
+            )
+        )
+        for _ in range(55):
+            app.gui_request_queue.put(tk_async_tasks.GuiRequest(kind="unknown"))
+
+        app._schedule_gui_request_polling()
+        with self.assertLogs(main.logger, level="WARNING"):
+            with patch.object(
+                main.tk_notifications, "show_info",
+                side_effect=RuntimeError("dialog failed"),
+            ) as show_info:
+                self._run_event_loop_until(app, app.gui_request_queue.empty)
+
+        show_info.assert_called_once_with(
+            "first", "dialog failure", parent=self.root
+        )
+        self.assertTrue(app.gui_request_queue.empty())
+
+    def test_real_event_loop_collects_normal_and_exception_worker_completion(self):
+        for should_raise in (False, True):
+            with self.subTest(should_raise=should_raise):
+                app = self._make_event_loop_app()
+                task_started = threading.Event()
+
+                def task(_handle, _video_id):
+                    task_started.set()
+                    if should_raise:
+                        raise RuntimeError("integration worker failed")
+                    return {"saved_files": []}
+
+                app._scrape_comments_task = task
+                app._schedule_gui_request_polling()
+                with patch.object(
+                    main.youtube_utils, "is_valid_video_id", return_value=True
+                ):
+                    with patch.object(main.tk_notifications, "show_error") as show_error:
+                        self.root.after(0, app._start_scrape_process)
+                        if should_raise:
+                            with self.assertLogs(main.logger, level="ERROR"):
+                                self._run_event_loop_until(
+                                    app,
+                                    lambda: task_started.is_set()
+                                    and app.worker_handle is None,
+                                )
+                        else:
+                            self._run_event_loop_until(
+                                app,
+                                lambda: task_started.is_set()
+                                and app.worker_handle is None,
+                            )
+
+                self.assertIsNone(app.worker_handle)
+                app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+                if should_raise:
+                    show_error.assert_called_once_with(
+                        "取得失敗", "integration worker failed",
+                        parent=self.root,
+                    )
+                else:
+                    show_error.assert_not_called()
+
+    def test_real_event_loop_recovers_gui_after_thread_start_failure(self):
+        app = self._make_event_loop_app()
+        app._schedule_gui_request_polling()
+        with patch.object(
+            main.youtube_utils, "is_valid_video_id", return_value=True
+        ):
+            with patch.object(
+                tk_async_tasks.threading.Thread,
+                "start",
+                side_effect=RuntimeError("integration start failure"),
+            ):
+                with patch.object(main.tk_notifications, "show_error") as show_error:
+                    self.root.after(0, app._start_scrape_process)
+                    self.root.after(20, self.root.quit)
+                    self.root.mainloop()
+
+        if app._gui_poll_after_id is not None:
+            try:
+                self.root.after_cancel(app._gui_poll_after_id)
+            except tk.TclError:
+                pass
+            app._gui_poll_after_id = None
+
+        self.assertIsNone(app.worker_handle)
+        app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+        app.open_json_button.config.assert_any_call(state=tk.DISABLED)
+        show_error.assert_called_once_with(
+            "起動失敗", "integration start failure", parent=self.root
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
