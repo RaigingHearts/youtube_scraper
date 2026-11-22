@@ -5,6 +5,7 @@ import inspect
 import os
 import queue
 import threading
+import textwrap
 import tkinter as tk
 import unittest
 from unittest.mock import MagicMock, patch
