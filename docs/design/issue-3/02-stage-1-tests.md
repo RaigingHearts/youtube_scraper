@@ -145,3 +145,19 @@ GUI不要の単体テストと実Tkイベントループを使う統合テスト
 - Stage 1の完了判定は、本書の対象範囲のテストがIssue #20で実装・実行され、既知の差異が解消または明示的に合意された後に行う。
 
 実行環境の共通条件は `13-test-environment.md`、テスト全体の方針は `10-test-policy.md`、共通契約は `11-common-test-spec.md` を参照する。
+
+
+### 9.1 Stage 1修正反映後の既存回帰テスト再実行（2026-11-22）
+
+利用者提供の実行ログに基づく記録。
+
+- 対象ブランチ：`feature/issue-3-stage-1-gui-request-foundation`
+- 対象コミット：`fe6c0197a8f95bb4fc9acab357969ae23edafe56`（`open_json_button` の起動失敗時復旧を追加したコミット）
+- 実行前に `git fetch origin` および `git pull --ff-only` を実施し、ローカルHEADとorigin追跡ブランチが同コミットであること、および `git status -sb` が同期状態であることを確認。
+- 実行環境：Windows（`win32`）、Python 3.8.10、pytest 8.3.5。
+- `python -m unittest discover -v`：50 tests、1.334秒、`OK`。
+- `python -m pytest -v`：50 items、1.74秒、`50 passed`。
+- 両テストランナーとも全件成功。前回実行時の50件成功から件数・成否に変化なし。
+- ログに表示された警告・エラー文は、該当する異常系テストが出力したものであり、各テストは `ok`／`PASSED` で終了している。
+
+この再実行により、`open_json_button` の復旧処理を含むコミットに対して既存回帰テスト50件が通過したことを確認した。ただし、起動失敗時に当該ボタンが実際に再有効化されることを直接検証する新規テストではない。Stage 1新規機能の直接検証は引き続きIssue #20で行う。
