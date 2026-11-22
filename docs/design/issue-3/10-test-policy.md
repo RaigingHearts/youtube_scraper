@@ -100,3 +100,14 @@ Issue #3のStage 1～4の実装作業中は、各Stageの新規テスト仕様�
 - GUI統合テスト・実デスクトップ受入確認：未実施。
 
 既存の module/utility/youtube_api_client/test_youtube_api_client.py は、現行APIクライアントから削除された youtube_api_client.tk_notifications をpatchしている。Issue #20で通知返却契約に合わせて修正する必要がある。Stage 2後の既存50テスト成功記録は、Stage 3後の回帰確認として流用しない。
+
+### 6.3 Stage 4実装後のテスト状況（2026-11-22）
+
+- Stage 4アプリケーションコード：実装ブランチへ反映済み。
+- Stage 4設計書・テスト仕様・共通インターフェースとの静的照合：実施済み。
+- Stage 4後の既存回帰テスト：実行結果未報告。
+- Stage 4専用新規テストコード：未実装（Issue #20で実施）。
+- GUI統合テスト・実デスクトップ受入確認：未実施。
+- API通信タイムアウト：本Stageでは追加していない。API execute()が戻らない場合、非daemonワーカーの終了待機が継続する。
+
+静的照合はテスト合格を意味しない。Issue #20ではStage 4テスト仕様に基づく新規テストと統合テストを実装・実行する。
