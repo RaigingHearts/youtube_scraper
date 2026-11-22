@@ -109,6 +109,41 @@ class WorkerHandle:
             with self.confirmation_lock:
                 self.pending_confirmations.pop(request.request_id, None)
 
+    def begin_shutdown_decision(self) -> str:
+        """保存開始との競合を調停し、終了判断待ち状態を設定する。"""
+        with self.shutdown_lock:
+            if self.done_event.is_set():
+                return "complete"
+            if self.save_started:
+                return "save_started"
+            self.shutdown_pending = True
+            self.shutdown_decision_event.clear()
+            return "pending"
+
+    def resolve_shutdown_decision(self, save_policy: Optional[str]) -> None:
+        """終了判断を確定し、保存判断バリアで待つワーカーを解放する。"""
+        if save_policy not in (None, "save_partial", "skip_additional_save"):
+            raise ValueError("unsupported save_policy: {}".format(save_policy))
+        with self.shutdown_lock:
+            self.save_policy = save_policy
+            self.shutdown_pending = False
+            self.shutdown_decision_event.set()
+
+    def begin_save(self) -> bool:
+        """保存開始を終了判断と排他的に確定する。Falseなら追加保存を行わない。"""
+        while True:
+            with self.shutdown_lock:
+                if self.shutdown_pending:
+                    wait_for_decision = True
+                else:
+                    wait_for_decision = False
+                    if self.save_policy == "skip_additional_save":
+                        return False
+                    self.save_started = True
+                    return True
+            if wait_for_decision:
+                self.shutdown_decision_event.wait()
+
     def cancel_for_shutdown(self) -> None:
         """終了によるキャンセルを確定し、表示開始前の未回答確認要求をFalseで解除する。"""
         with self.confirmation_lock:
@@ -152,7 +187,7 @@ def run_task_in_thread(task_function: Callable, gui_request_queue, *args, **kwar
             logger.info("ワーカー '%s' が終了しました。", task_name)
 
     thread = threading.Thread(target=worker_wrapper, name="youtube-scraper-worker")
-    thread.daemon = True  # 非daemon化は終了制御を実装するStage 4で行う。
+    thread.daemon = False
     handle.thread = thread
 
     logger.info("タスク '%s' を別スレッドで開始します。", task_name)
