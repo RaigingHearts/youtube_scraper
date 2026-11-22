@@ -222,6 +222,7 @@ class ScrapeTaskSaveResultTests(unittest.TestCase):
                 "output_folder_name",
             },
         )
+        self.assertIs(result["fetch_result"], self.fetch_result)
         self.assertEqual(result["fetched_count"], 2)
         self.assertEqual(result["total_expected"], 5)
         self.assertEqual(
@@ -231,6 +232,9 @@ class ScrapeTaskSaveResultTests(unittest.TestCase):
         self.assertTrue(all(record["success"] for record in result["saved_files"]))
         self.assertTrue(
             all(record["path"].endswith(".json") for record in result["saved_files"])
+        )
+        self.assertTrue(
+            all(__import__("os").path.isabs(record["path"]) for record in result["saved_files"])
         )
         self.assertEqual(save_file.call_count, 4)
         self.assertEqual(
