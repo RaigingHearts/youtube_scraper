@@ -29,7 +29,7 @@ Python 3.8.10環境で、Event確認の正常・異常・競合系とAPIクラ�
 
 Stage 3の実装では、APIクライアントの通知情報は result_data["notifications"] に格納される。各通知レコードは stage、kind、title、message を持つ。既存の fetch_all_comments() の3要素タプルは維持される。
 
-既存の module/utility/youtube_api_client/test_youtube_api_client.py は youtube_api_client.tk_notifications をpatchするテストを含むが、実装モジュールから同属性は削除された。Issue #20では、これらのpatchを撤去し、返却される notifications の内容・種別・件数を検証するテストへ更新する。既存テストの期待値を機械的に置き換えるのではなく、従来通知対象とログのみの事象の区別、重複通知防止、戻り値・取得結果の互換性を確認する。
+既存の module/utility/youtube_api_client/test_youtube_api_client.py は、Issue #20の新規テスト実装に先立つ独立レビュー対応として、既存回帰テストの収集・実行を可能にするため修復した。コミット 40a05f0 で youtube_api_client.tk_notifications へのpatchを撤去し、返却される notifications の内容・種別・件数を検証する形へ更新済みである。対象APIクライアントテスト21件、およびリポジトリ全体の既存回帰テスト50件が同コミットで成功した。この修復は既存テストの緊急対応であり、Issue #20で実施するStage 1～4の新規テストコード実装とは別の作業である。Issue #20では、従来通知対象とログのみの事象の区別、重複通知防止、戻り値・取得結果の互換性を含む新規検証を仕様に基づいて実装する。
 
 追加する主な検証対象：
 - WorkerHandleの確認要求登録とキュー投入の同期、要求ごとのEvent独立性、Event解除後の登録解除。
