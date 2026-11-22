@@ -553,10 +553,10 @@ class YouTubeCommentScraperApp:
             None if decision_state == "save_started"
             else ("save_partial" if choice else "skip_additional_save")
         )
-        worker_still_running = handle.resolve_shutdown_decision(save_policy)
+        worker_still_running = handle.resolve_shutdown_decision(
+            save_policy, cancel=True
+        )
         self._shutdown_state = "stopping"
-        if worker_still_running:
-            handle.cancel_for_shutdown()
         self._collect_pending_shutdown_requests()
         self._schedule_gui_request_polling()
 
