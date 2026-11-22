@@ -138,37 +138,37 @@ class ScrapeTaskProgressAndNotificationTests(unittest.TestCase):
             return progress
 
         main_thread_id = threading.current_thread().ident
-        with patch.object(
-            self.handle,
-            "take_latest_progress",
-            side_effect=take_then_publish_from_worker,
-        ):
-            with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+        with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+            with patch.object(
+                self.handle,
+                "take_latest_progress",
+                side_effect=take_then_publish_from_worker,
+            ):
                 self.app._handle_gui_request(first_marker)
-                self.assertEqual(update.call_count, 1)
-                update.assert_called_with(
-                    self.app.progress_label,
-                    self.app.progress_bar,
-                    2,
-                    10,
-                    "first",
-                )
-                self.assertEqual(threading.current_thread().ident, main_thread_id)
+            self.assertEqual(update.call_count, 1)
+            update.assert_called_with(
+                self.app.progress_label,
+                self.app.progress_bar,
+                2,
+                10,
+                "first",
+            )
+            self.assertEqual(threading.current_thread().ident, main_thread_id)
 
-                # マーカー処理中に到着した更新は、次のマーカーとして残る。
-                self.assertEqual(self.app.gui_request_queue.qsize(), 1)
-                second_marker = self.app.gui_request_queue.get_nowait()
-                self.assertEqual(second_marker.kind, "progress")
-                self.app._handle_gui_request(second_marker)
+            # マーカー処理中に到着した更新は、次のマーカーとして残る。
+            self.assertEqual(self.app.gui_request_queue.qsize(), 1)
+            second_marker = self.app.gui_request_queue.get_nowait()
+            self.assertEqual(second_marker.kind, "progress")
+            self.app._handle_gui_request(second_marker)
 
-                self.assertEqual(update.call_count, 2)
-                update.assert_called_with(
-                    self.app.progress_label,
-                    self.app.progress_bar,
-                    6,
-                    10,
-                    "latest",
-                )
+            self.assertEqual(update.call_count, 2)
+            update.assert_called_with(
+                self.app.progress_label,
+                self.app.progress_bar,
+                6,
+                10,
+                "latest",
+            )
 
         self.assertEqual(len(producer_thread_ids), 1)
         self.assertNotEqual(producer_thread_ids[0], main_thread_id)
