@@ -582,6 +582,8 @@ class YouTubeCommentScraperApp:
                 return
             if completed_handle.thread is not None and completed_handle.thread.is_alive():
                 return
+        elif self.worker_handle is None:
+            self._shutdown_state = "complete"
         if not self.gui_request_queue.empty() or self._pending_modal_requests:
             return
         if self._dialog_active or self._processing_pending_modal_requests:
