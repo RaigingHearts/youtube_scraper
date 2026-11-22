@@ -106,6 +106,85 @@ class ScrapeTaskProgressAndNotificationTests(unittest.TestCase):
             },
         )
 
+    def test_progress_update_during_marker_consumption_queues_next_marker(self):
+        first_progress = {
+            "current_comments": 2,
+            "total_comments": 10,
+            "message": "first",
+        }
+        latest_progress = {
+            "current_comments": 6,
+            "total_comments": 10,
+            "message": "latest",
+        }
+        self.handle.publish_progress(first_progress)
+        first_marker = self.app.gui_request_queue.get_nowait()
+        self.assertEqual(first_marker.kind, "progress")
+
+        original_take = self.handle.take_latest_progress
+        producer_thread_ids = []
+
+        def take_then_publish_from_worker():
+            progress = original_take()
+
+            def publish_latest():
+                producer_thread_ids.append(threading.current_thread().ident)
+                self.handle.publish_progress(latest_progress)
+
+            producer = threading.Thread(target=publish_latest)
+            producer.start()
+            producer.join(2)
+            self.assertFalse(producer.is_alive())
+            return progress
+
+        main_thread_id = threading.current_thread().ident
+        with patch.object(
+            self.handle,
+            "take_latest_progress",
+            side_effect=take_then_publish_from_worker,
+        ):
+            with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+                self.app._handle_gui_request(first_marker)
+                self.assertEqual(update.call_count, 1)
+                update.assert_called_with(
+                    self.app.progress_label,
+                    self.app.progress_bar,
+                    2,
+                    10,
+                    "first",
+                )
+                self.assertEqual(threading.current_thread().ident, main_thread_id)
+
+                # マーカー処理中に到着した更新は、次のマーカーとして残る。
+                self.assertEqual(self.app.gui_request_queue.qsize(), 1)
+                second_marker = self.app.gui_request_queue.get_nowait()
+                self.assertEqual(second_marker.kind, "progress")
+                self.app._handle_gui_request(second_marker)
+
+                self.assertEqual(update.call_count, 2)
+                update.assert_called_with(
+                    self.app.progress_label,
+                    self.app.progress_bar,
+                    6,
+                    10,
+                    "latest",
+                )
+
+        self.assertEqual(len(producer_thread_ids), 1)
+        self.assertNotEqual(producer_thread_ids[0], main_thread_id)
+        self.assertTrue(self.app.gui_request_queue.empty())
+
+    def test_progress_marker_without_value_is_ignored_safely(self):
+        self.app.worker_handle = self.handle
+        marker = tk_async_tasks.GuiRequest(kind="progress")
+
+        with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+            self.app._handle_gui_request(marker)
+
+        update.assert_not_called()
+        self.app.comment_count_label.config.assert_not_called()
+        self.assertIsNone(self.handle.take_latest_progress())
+
     def test_api_notifications_are_forwarded_once_without_replaying_errors(self):
         notices = [
             {"kind": "warning", "title": "API warning", "message": "notice one"},
