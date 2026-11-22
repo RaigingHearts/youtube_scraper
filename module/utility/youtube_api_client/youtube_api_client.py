@@ -148,6 +148,8 @@ def fetch_all_comments(
             ),
         })
         logger.error(message)
+        if is_cancelled():
+            result_data["fetch_status"] = "cancelled"
         return result_data, 0, 0
 
     # 取得件数はユニークコメント数として扱い、Rawレコード数は別途記録する。
