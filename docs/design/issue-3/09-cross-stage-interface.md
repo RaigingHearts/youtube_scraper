@@ -135,3 +135,17 @@ Stage 3実装で確定した実コード上の契約を記録する。
 - 確認・通知モーダルはGUI側で直列化し、表示中の再入要求をFIFO保留列に置く。終了処理開始後は保留中の古い確認要求を新たに表示しない。
 
 上記はStage 3の実装反映記録であり、Issue #20による新規テスト実装・実行の完了を示すものではない。実装とテストの差異が見つかった場合は、Issue #20でテスト結果を記録し、必要に応じて本書とStage設計・テスト仕様を同期修正する。
+
+
+## 18. Issue #20 Stage 3テスト検証結果と残存統合確認（2026-11-23）
+
+利用者報告によるWindows 7 SP1（AMD64）／Python 3.8.10／標準 `unittest` の実行結果：
+
+- Stage 3専用：24 tests、0.145秒、`OK`。
+- 既存 `test_main`：25 tests、0.768秒、`OK`。
+- リポジトリ全体 `python -m unittest discover -v`：135 tests、2.198秒、`OK`。
+- 対象ブランチ `feature/issue-20-stage-1-tests`、対象コミット `562c3f0`。Git作業ツリーのtracked filesに差分はなく、`git diff --check` はエラーなし。
+
+Stage 3テストは、WorkerHandle確認要求の登録・回答・解除、終了競合、モーダルFIFOと例外復旧、APIクライアントのGUI非依存、通知の分類・重複防止、タスクへの継続確認引き渡しを対象とする。キャンセル理由 `application_shutdown` および `confirmation_unavailable` がタスク結果の `fetch_result["cancel_reason"]` に伝達されることを追加確認した。
+
+**残存する統合確認：** 実Tkイベントループ上でStage 3の確認要求・ダイアログ・FIFOモーダル処理を組み合わせる専用シナリオは未実施である。Stage 1・2の実Tkイベントループ試験をStage 3のGUI統合試験の代替とみなさない。Stage 1～4全体統合検証でこのシナリオを実施し、成功・失敗・未実施の別を記録する。実デスクトップ受け入れ確認も全体統合工程の対象として残す。
