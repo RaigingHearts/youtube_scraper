@@ -8,7 +8,7 @@ import sys
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,9 @@ class YouTubeCommentScraperApp:
         self.gui_request_queue = queue.Queue()
         self.worker_handle: Optional[tk_async_tasks.WorkerHandle] = None
         self._gui_poll_after_id = None
+        self._dialog_active = False
+        self._pending_modal_requests = []
+        self._processing_pending_modal_requests = False
 
         # アプリケーション起動時にAPIキーを確認・プロンプト
         self._initialize_api_key()
@@ -218,9 +221,8 @@ class YouTubeCommentScraperApp:
                 "message": message,
             })
 
-        # Stage 3でキュー経由の継続確認へ移行するまで、既存経路を維持する。
         def confirm_callback(message: str) -> bool:
-            return tk_async_tasks.confirm_continuation_gui(self.master, message)
+            return worker_handle.request_confirmation(message)
 
         def save_file(kind: str, data: Any, filename: str) -> bool:
             """保存を試みたファイルの成否を、確定直後にpartial_resultへ記録する。"""
@@ -261,7 +263,25 @@ class YouTubeCommentScraperApp:
             confirm_callback=confirm_callback,
         )
 
+        # APIクライアントはGUIを操作せず、既存通知相当の分類情報を返す。
+        for api_notification in result_data.get("notifications", []):
+            worker_handle.gui_request_queue.put(
+                tk_async_tasks.GuiRequest(
+                    kind="notification",
+                    payload={
+                        "kind": api_notification.get("kind", "error"),
+                        "title": api_notification.get("title", "APIエラー"),
+                        "message": api_notification.get("message", ""),
+                    },
+                )
+            )
+
         fetch_status = result_data.get("fetch_status", "failed")
+        if fetch_status == "cancelled":
+            with worker_handle.confirmation_lock:
+                cancel_reason = worker_handle.cancel_reason
+            if cancel_reason:
+                result_data["cancel_reason"] = cancel_reason
         video_info_raw_response = result_data.get("video_info_raw_response", {})
         channel_info_raw_response = result_data.get("channel_info_raw_response", {})
         comment_threads_raw_responses = result_data.get(
@@ -431,6 +451,7 @@ class YouTubeCommentScraperApp:
     def _poll_gui_requests(self):
         """最大50件ずつGUI要求を処理し、残件があれば次回も確認する。"""
         self._gui_poll_after_id = None
+        self._drain_pending_modal_requests()
         processed = 0
         while processed < 50:
             try:
@@ -473,39 +494,88 @@ class YouTubeCommentScraperApp:
                 self.comment_count_label.config(text=count_text)
             return
 
-        if request.kind == "notification":
-            payload = request.payload
-            notification_kind = payload.get("kind", "info")
-            title = payload.get("title", "通知")
-            message = payload.get("message", "")
-            if notification_kind == "warning":
-                tk_notifications.show_warning(title, message, parent=self.master)
-            elif notification_kind == "error":
-                tk_notifications.show_error(title, message, parent=self.master)
-            else:
-                tk_notifications.show_info(title, message, parent=self.master)
+        if request.kind in ("notification", "confirmation"):
+            if self._dialog_active:
+                self._pending_modal_requests.append(request)
+                return
+            self._show_modal_request(request)
             return
 
-        if request.kind == "confirmation":
-            # 継続確認のダイアログ処理はStage 3で導入する。現段階では待機を残さない。
-            handle = self.worker_handle
-            if handle is not None:
-                with handle.confirmation_lock:
-                    if not request.answered:
-                        request.response = False
-                        request.response_reason = "confirmation_unavailable"
-                        request.answered = True
-                        if request.response_event is not None:
-                            request.response_event.set()
-            elif request.response_event is not None:
+        logger.warning("未知のGUI要求種別を受信しました: %s", request.kind)
+
+    def _answer_confirmation(self, request, response: bool, response_reason: str) -> None:
+        """確認応答を一度だけ確定し、要求固有Eventを解除する。"""
+        handle = self.worker_handle
+        if handle is None:
+            if request.response_event is not None:
                 request.response = False
                 request.response_reason = "confirmation_unavailable"
                 request.answered = True
                 request.response_event.set()
-            logger.warning("Stage 3実装前の継続確認要求をFalseで解除しました。")
             return
+        with handle.confirmation_lock:
+            if request.answered:
+                return
+            request.response = bool(response)
+            request.response_reason = response_reason
+            request.answered = True
+            if not response:
+                if response_reason == "user_response" and handle.cancel_reason is None:
+                    handle.cancel_reason = "continuation_declined"
+                elif response_reason == "confirmation_unavailable" and handle.cancel_reason is None:
+                    handle.cancel_reason = "confirmation_unavailable"
+            request.response_event.set()
 
-        logger.warning("未知のGUI要求種別を受信しました: %s", request.kind)
+    def _show_modal_request(self, request: tk_async_tasks.GuiRequest) -> None:
+        """確認・通知ダイアログを直列表示し、ネストしたpoll再入を許容する。"""
+        if self._dialog_active:
+            self._pending_modal_requests.append(request)
+            return
+        self._dialog_active = True
+        try:
+            if request.kind == "confirmation":
+                handle = self.worker_handle
+                if handle is not None and handle.cancel_event.is_set():
+                    self._answer_confirmation(request, False, "application_shutdown")
+                else:
+                    try:
+                        answer = messagebox.askyesno(
+                            "確認", request.payload.get("message", ""), parent=self.master
+                        )
+                        self._answer_confirmation(request, answer, "user_response")
+                    except Exception:
+                        logger.exception("継続確認ダイアログの表示に失敗しました。")
+                        self._answer_confirmation(request, False, "confirmation_unavailable")
+            else:
+                payload = request.payload
+                notification_kind = payload.get("kind", "info")
+                title = payload.get("title", "通知")
+                message = payload.get("message", "")
+                try:
+                    if notification_kind == "warning":
+                        tk_notifications.show_warning(title, message, parent=self.master)
+                    elif notification_kind == "error":
+                        tk_notifications.show_error(title, message, parent=self.master)
+                    else:
+                        tk_notifications.show_info(title, message, parent=self.master)
+                except Exception:
+                    logger.exception("通知ダイアログの表示に失敗しました。")
+        finally:
+            self._dialog_active = False
+        if not self._processing_pending_modal_requests:
+            self._drain_pending_modal_requests()
+
+    def _drain_pending_modal_requests(self) -> None:
+        """保留中のモーダル要求をFIFO順に一件ずつ処理する。"""
+        if self._dialog_active or self._processing_pending_modal_requests:
+            return
+        self._processing_pending_modal_requests = True
+        try:
+            while self._pending_modal_requests and not self._dialog_active:
+                request = self._pending_modal_requests.pop(0)
+                self._show_modal_request(request)
+        finally:
+            self._processing_pending_modal_requests = False
 
     def _finish_worker(self, handle: tk_async_tasks.WorkerHandle):
         """ワーカー結果・部分保存結果をメインスレッドで回収し、GUI状態を復旧する。"""
