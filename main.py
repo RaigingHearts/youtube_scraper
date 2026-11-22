@@ -59,6 +59,10 @@ class YouTubeCommentScraperApp:
         self._dialog_active = False
         self._pending_modal_requests = []
         self._processing_pending_modal_requests = False
+        self._shutdown_state = "running"
+        self._shutdown_requested = False
+        self._shutdown_notifications = []
+        self._shutdown_summary_shown = False
 
         # アプリケーション起動時にAPIキーを確認・プロンプト
         self._initialize_api_key()
@@ -66,6 +70,7 @@ class YouTubeCommentScraperApp:
         # APIキーが取得できた場合のみGUIを構築
         if self.api_key:
             self._create_widgets()
+            master.protocol("WM_DELETE_WINDOW", self._on_close_request)
             self._schedule_gui_request_polling()
         else:
             # APIキーが設定されなかった場合はアプリケーションを終了
@@ -209,6 +214,7 @@ class YouTubeCommentScraperApp:
         assert api_key is not None, "APIキーがNoneです。これは初期化で防がれるべきです。"
 
         saved_files = worker_handle.partial_result.setdefault("saved_files", [])
+        worker_handle.partial_result["saved_files"] = saved_files
 
         def progress_callback(
             current_comments: int,
@@ -311,7 +317,15 @@ class YouTubeCommentScraperApp:
         comments_saved = False
         replies_saved = False
 
-        if video_info_raw_response:
+        has_save_data = bool(
+            video_info_raw_response
+            or (channel_info_raw_response and channel_info_raw_response.get("items"))
+            or comment_threads_raw_responses
+            or comment_replies_raw_responses
+        )
+        save_allowed = worker_handle.begin_save() if has_save_data else False
+
+        if save_allowed and video_info_raw_response:
             video_info_saved = save_file(
                 "video_info", video_info_raw_response, video_info_filename
             )
@@ -320,7 +334,7 @@ class YouTubeCommentScraperApp:
         if channel_info_raw_response and channel_info_raw_response.get("items"):
             channel_id = channel_info_raw_response["items"][0].get("id")
 
-        if channel_id:
+        if save_allowed and channel_id:
             channel_info_filename = "channel_info_raw_{}.json".format(channel_id)
             channel_info_saved = save_file(
                 "channel_info", channel_info_raw_response, channel_info_filename
@@ -330,12 +344,12 @@ class YouTubeCommentScraperApp:
                 "チャンネルIDが不明なため、チャンネル情報Rawデータの保存はスキップされました。"
             )
 
-        if comment_threads_raw_responses:
+        if save_allowed and comment_threads_raw_responses:
             comments_saved = save_file(
                 "comments", comment_threads_raw_responses, comment_filename
             )
 
-        if comment_replies_raw_responses:
+        if save_allowed and comment_replies_raw_responses:
             replies_saved = save_file(
                 "replies", comment_replies_raw_responses, replies_filename
             )
@@ -385,10 +399,19 @@ class YouTubeCommentScraperApp:
                 + failure_summary,
             )
         elif fetch_status == "cancelled":
+            with worker_handle.confirmation_lock:
+                cancel_reason = worker_handle.cancel_reason
+            cancel_message = (
+                "アプリケーション終了要求により取得を中断しました。"
+                if cancel_reason == "application_shutdown"
+                else "ユーザー操作により取得を中断しました。"
+            )
+            if not save_allowed and has_save_data:
+                cancel_message += "\n追加保存は行っていません。"
             notification = (
                 "warning",
                 "取得中断",
-                "ユーザー操作により取得を中断しました。\n"
+                cancel_message + "\n"
                 + saved_summary
                 + failure_summary,
             )
@@ -441,15 +464,137 @@ class YouTubeCommentScraperApp:
 
     def _schedule_gui_request_polling(self):
         """GUI要求キューとワーカー状態をメインスレッドで定期確認する。"""
-        if self._gui_poll_after_id is not None:
+        if self._shutdown_state == "closed" or self._gui_poll_after_id is not None:
             return
         try:
             self._gui_poll_after_id = self.master.after(50, self._poll_gui_requests)
         except tk.TclError:
             self._gui_poll_after_id = None
 
+    def _on_close_request(self):
+        """ウィンドウ終了要求を一度だけ受け付ける。"""
+        if self._shutdown_state != "running":
+            return
+        if self._dialog_active:
+            self._shutdown_requested = True
+            return
+        self._begin_shutdown()
+
+    def _begin_shutdown(self):
+        """保存開始との競合を調停して終了方針を確認する。"""
+        if self._shutdown_state != "running":
+            return
+        if self._dialog_active:
+            self._shutdown_requested = True
+            return
+
+        handle = self.worker_handle
+        if handle is None:
+            self._shutdown_state = "stopping"
+            self._finalize_shutdown()
+            return
+        if handle.done_event.is_set():
+            self._shutdown_state = "stopping"
+            self._schedule_gui_request_polling()
+            return
+
+        decision_state = handle.begin_shutdown_decision()
+        if decision_state == "complete":
+            self._shutdown_state = "stopping"
+            self._schedule_gui_request_polling()
+            return
+
+        self._shutdown_state = "shutdown_pending"
+        self._dialog_active = True
+        try:
+            choice = messagebox.askyesnocancel(
+                "終了確認",
+                "コメント取得処理が実行中です。\n"
+                "はい：取得済みデータを保存して終了\n"
+                "いいえ：追加保存を行わず終了\n"
+                "キャンセル：取得処理を続行",
+                parent=self.master,
+            )
+        except Exception:
+            logger.exception("終了確認ダイアログの表示に失敗しました。")
+            choice = None
+        finally:
+            self._dialog_active = False
+
+        # ダイアログ表示中にワーカーが自然終了していれば、選択を遅れて適用しない。
+        if handle.done_event.is_set():
+            handle.resolve_shutdown_decision(None)
+            self._shutdown_state = "stopping"
+            self._schedule_gui_request_polling()
+            return
+
+        if choice is None:
+            handle.resolve_shutdown_decision(None)
+            self._shutdown_state = "running"
+            self._shutdown_requested = False
+            self._drain_pending_modal_requests()
+            self._schedule_gui_request_polling()
+            return
+
+        save_policy = "save_partial" if choice else "skip_additional_save"
+        handle.resolve_shutdown_decision(save_policy)
+        self._shutdown_state = "stopping"
+        handle.cancel_for_shutdown()
+        self._collect_pending_shutdown_requests()
+        self._schedule_gui_request_polling()
+
+    def _collect_pending_shutdown_requests(self):
+        """終了確定時に保留モーダル要求を通知サマリーへ移す。"""
+        while self._pending_modal_requests:
+            request = self._pending_modal_requests.pop(0)
+            if request.kind == "notification":
+                self._shutdown_notifications.append(request.payload)
+            elif request.kind == "confirmation" and not request.answered:
+                self._answer_confirmation(
+                    request, False, "application_shutdown"
+                )
+
+    def _finalize_shutdown(self):
+        """ワーカーとGUI要求の回収後、通知サマリーを表示してrootを破棄する。"""
+        if self._shutdown_state == "closed":
+            return
+        if self.worker_handle is not None:
+            return
+        if not self.gui_request_queue.empty() or self._pending_modal_requests:
+            return
+        if self._dialog_active or self._processing_pending_modal_requests:
+            return
+
+        if self._shutdown_notifications and not self._shutdown_summary_shown:
+            self._shutdown_summary_shown = True
+            lines = []
+            for index, notice in enumerate(self._shutdown_notifications, start=1):
+                kind = str(notice.get("kind", "info")).upper()
+                title = notice.get("title", "通知")
+                message = notice.get("message", "")
+                lines.append("{}. [{}] {}\n{}".format(index, kind, title, message))
+            self._dialog_active = True
+            try:
+                messagebox.showinfo(
+                    "終了時の通知",
+                    "終了処理中に発生した通知です。\n\n" + "\n\n".join(lines),
+                    parent=self.master,
+                )
+            except Exception:
+                logger.exception("終了時通知サマリーの表示に失敗しました。")
+            finally:
+                self._dialog_active = False
+
+        self._shutdown_state = "closed"
+        try:
+            self.master.destroy()
+        except tk.TclError:
+            logger.debug("rootは既に破棄されています。")
+
     def _poll_gui_requests(self):
         """最大50件ずつGUI要求を処理し、残件があれば次回も確認する。"""
+        if self._shutdown_state == "closed":
+            return
         self._gui_poll_after_id = None
         self._drain_pending_modal_requests()
         processed = 0
@@ -467,6 +612,14 @@ class YouTubeCommentScraperApp:
         handle = self.worker_handle
         if handle is not None and handle.done_event.is_set() and self.gui_request_queue.empty():
             self._finish_worker(handle)
+
+        if (
+            self._shutdown_state in ("stopping", "complete")
+            and self.worker_handle is None
+            and self.gui_request_queue.empty()
+            and not self._pending_modal_requests
+        ):
+            self._finalize_shutdown()
 
         # 上限到達時に残件がある場合も、次回ポーリングを必ず予約する。
         self._schedule_gui_request_polling()
@@ -494,7 +647,25 @@ class YouTubeCommentScraperApp:
                 self.comment_count_label.config(text=count_text)
             return
 
-        if request.kind in ("notification", "confirmation"):
+        if request.kind == "notification":
+            if self._shutdown_state in ("shutdown_pending", "stopping", "complete"):
+                self._shutdown_notifications.append(request.payload)
+                return
+            if self._dialog_active:
+                self._pending_modal_requests.append(request)
+                return
+            self._show_modal_request(request)
+            return
+
+        if request.kind == "confirmation":
+            if self._shutdown_state in ("shutdown_pending", "stopping", "complete"):
+                if self._shutdown_state != "shutdown_pending" and not request.answered:
+                    self._answer_confirmation(
+                        request, False, "application_shutdown"
+                    )
+                else:
+                    self._pending_modal_requests.append(request)
+                return
             if self._dialog_active:
                 self._pending_modal_requests.append(request)
                 return
@@ -580,12 +751,22 @@ class YouTubeCommentScraperApp:
                     logger.exception("通知ダイアログの表示に失敗しました。")
         finally:
             self._dialog_active = False
+        if self._shutdown_requested and self._shutdown_state == "running":
+            self._shutdown_requested = False
+            try:
+                self.master.after_idle(self._begin_shutdown)
+            except tk.TclError:
+                logger.debug("終了要求の予約時にrootが破棄されていました。")
         if not self._processing_pending_modal_requests:
             self._drain_pending_modal_requests()
 
     def _drain_pending_modal_requests(self) -> None:
         """保留中のモーダル要求をFIFO順に一件ずつ処理する。"""
-        if self._dialog_active or self._processing_pending_modal_requests:
+        if (
+            self._dialog_active
+            or self._processing_pending_modal_requests
+            or self._shutdown_state in ("shutdown_pending", "stopping", "complete", "closed")
+        ):
             return
         self._processing_pending_modal_requests = True
         try:
@@ -685,6 +866,9 @@ class YouTubeCommentScraperApp:
             )
         finally:
             self.worker_handle = None
+
+        if self._shutdown_state in ("stopping", "complete"):
+            self._finalize_shutdown()
 
     def _open_json_file(self):
         """保存されたJSONファイルを開く。"""
