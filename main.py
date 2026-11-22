@@ -571,12 +571,17 @@ class YouTubeCommentScraperApp:
                     request, False, "application_shutdown"
                 )
 
-    def _finalize_shutdown(self):
-        """ワーカーとGUI要求の回収後、通知サマリーを表示してrootを破棄する。"""
+    def _finalize_shutdown(self, completed_handle=None):
+        """ワーカーとGUI要求の回収後、通知サマリー、Handle解放、root破棄を行う。"""
         if self._shutdown_state == "closed":
             return
-        if self.worker_handle is not None:
+        if self.worker_handle is not None and self.worker_handle is not completed_handle:
             return
+        if completed_handle is not None:
+            if not completed_handle.done_event.is_set():
+                return
+            if completed_handle.thread is not None and completed_handle.thread.is_alive():
+                return
         if not self.gui_request_queue.empty() or self._pending_modal_requests:
             return
         if self._dialog_active or self._processing_pending_modal_requests:
@@ -608,11 +613,15 @@ class YouTubeCommentScraperApp:
             finally:
                 self._dialog_active = False
 
+        if completed_handle is not None and self.worker_handle is completed_handle:
+            self.worker_handle = None
         self._shutdown_state = "closed"
         try:
             self.master.destroy()
         except tk.TclError:
             logger.debug("rootは既に破棄されています。")
+        except Exception:
+            logger.exception("rootの破棄中に予期しない例外が発生しました。")
 
     def _poll_gui_requests(self):
         """最大50件ずつGUI要求を処理し、残件があれば次回も確認する。"""
@@ -908,12 +917,13 @@ class YouTubeCommentScraperApp:
         except Exception:
             logger.exception("ワーカー完了後のGUI状態復旧に失敗しました。")
         finally:
-            self.worker_handle = None
+            if self._shutdown_state in ("stopping", "complete"):
+                self._shutdown_state = "complete"
+            else:
+                self.worker_handle = None
 
-        if self._shutdown_state == "stopping":
-            self._shutdown_state = "complete"
         if self._shutdown_state == "complete":
-            self._finalize_shutdown()
+            self._finalize_shutdown(completed_handle=handle)
 
     def _open_json_file(self):
         """保存されたJSONファイルを開く。"""
