@@ -112,11 +112,27 @@ Stage 2の主な検証対象は `main.py` と `_scrape_comments_task()` の進�
 6. Stage 2途中で一時許容したAPIクライアント内の旧通知経路と旧継続確認GUI経路はStage 3で撤去済みであることを、Stage 3テスト仕様と合わせて最終統合状態で確認する。
 
 ### 9.1 Stage 2実装完了とテスト検証完了の区別
-Stage 2の実装完了は、アプリケーションコードの移行、設計との整合確認、実行可能な既存回帰テストの実行結果記録をもって判断する。既存回帰テストの成功は新規機能の直接検証を意味しない。
+Stage 2のアプリケーション実装完了と、Issue #20におけるStage 2新規テスト検証完了は別の状態として管理する。既存回帰テストの成功や静的整合性確認だけを、新規機能テストの検証完了と読み替えない。
 
-新規Stage 2テストコードの実装・実行、およびStage 1～4との統合検証は、合意済みの作業分担に従い、Stage 1～4のアプリケーション改修完了後にIssue #20で実施する。したがってIssue #20での新規テスト検証完了はStage 2の実装完了条件とは分けて管理し、未実施のテストを実施済みとして扱わない。
+Stage 1テスト作業ブランチの `test_main.py` には、`test_finish_worker_restores_widgets_and_saved_file_paths`、`test_finish_worker_keeps_json_button_disabled_without_saved_files`、`test_real_event_loop_processes_worker_requests_before_releasing_handle` に、Stage 2の進捗・通知の実処理接続または取得結果・保存結果のGUI反映を確認する補助的なクロスStage回帰アサーションが含まれる。最後の実イベントループ統合テストはStage 1のキュー処理・完了順序も検証する。これらはStage 2専用テスト群の件数には算入しない。
 
-なお、Stage 1テスト作業ブランチの `test_main.py` には、`test_finish_worker_restores_widgets_and_saved_file_paths`、`test_finish_worker_keeps_json_button_disabled_without_saved_files`、`test_real_event_loop_processes_worker_requests_before_releasing_handle` に、Stage 2の進捗・通知の実処理接続または取得結果・保存結果のGUI反映を確認する補助的なクロスStage回帰アサーションが含まれる。最後の実イベントループ統合テストはStage 1のキュー処理・完了順序も検証する。これらはStage 2の一部動作を先行して確認するものであり、Stage 2専用テスト群の実装・実行やStage 2テスト検証完了を意味しない。Stage 2では本書の期待条件に沿って、進捗・通知の発生元と順序、結果受け渡し・保存部分失敗・GUI反映を独立して網羅する。
+Issue #20でStage 2専用テストを実装・実行し、仕様との横断確認を行った結果は次節に記録する。Stage 2のテスト検証完了は、専用テストの実行成功だけでなく、設計・共通インターフェース・実装・テストの整合確認と作業記録をもって判断する。Stage 1～4を横断する統合検証および実デスクトップ環境での受け入れ確認は、別途の完了条件として管理する。
+
+### 9.2 Stage 2新規テスト検証結果（2026-11-23）
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`6c119e531c54c47399b870eac73ba464e89f9e16`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。実Tkイベントループを利用可能。
+- `python -m unittest test_stage2 -v)：20 tests、0.584秒、`OK`。
+- `python -m unittest test_main -v)：25 tests、0.875秒、`OK`。
+- `python -m unittest discover -v)：111 tests、1.964秒、`OK`。
+- 専用20件には、進捗マーカー消費中の更新競合と進捗値のないマーカーの安全な処理を検証する追加2件を含む。前者は別スレッドからの更新を同期制御して次のマーカーが登録・処理されることを確認し、後者はGUI更新を行わず安全に無視することを確認する。
+- `test_main.py` 25件と全体111件は、それぞれ専用テスト20件と重複して含まれるため、件数を加算しない。全体111件はリポジトリのテスト探索結果である。
+- Git同期確認ではローカルブランチがorigin追跡ブランチと同期し、未追跡ファイル `issue3-comment.md` が保持されているとの報告を受けた。
+- 保存失敗、ワーカー例外、GUI要求例外等のログは、異常系テストが意図的に発生させた出力であり、対応するテストはすべて成功した。
+- 実API通信は行わず、実Tkイベントループ統合テストは利用者のWindowsデスクトップ環境で実行された。
+- Stage 2専用テストの実行と最終横断確認は完了。Stage 1～4の全体統合検証および実デスクトップ受け入れ確認全体の完了を意味しない。
 
 ## 10. 未確定事項・実装時の照合
 
