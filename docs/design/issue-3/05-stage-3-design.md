@@ -31,3 +31,17 @@ confirm_continuation_gui()、BooleanVar、wait_variableを利用する旧方式�
 
 ## 8. 完了条件
 Event確認が正常・異常・終了競合の各経路で一度だけ解除され、pending_confirmationsが解放後に残らず、応答値と理由が上書きされないこと。モーダルダイアログの再入が防止され、保留要求のFIFO順が維持されること。APIクライアントにGUI依存がなく、従来通知対象だった事象だけが対応する通知種別で一度通知され、従来ログのみだった事象が通知へ昇格しないこと。既存の返却タプル・取得結果・エラー状態の意味が維持されること。
+
+
+## 9. Stage 3実装反映記録（2026-11-22）
+
+Stage 3のアプリケーションコード実装をブランチ feature/issue-3-stage-1-gui-request-foundation に反映した。最終実装コミットは a18b9a6fd2a86e46c33cbe1a6b1b11288105a869。
+
+- module/utility/tk_async_tasks/tk_async_tasks.py：WorkerHandleに確認要求の登録・キュー投入・Event待機・finallyでの登録解除を実装。終了時は未回答要求をFalseで解除し、既回答の応答値・理由を上書きしない。
+- main.py：確認・通知等のモーダルダイアログをGUIメインスレッドに集約。表示中フラグとFIFO保留列により、モーダルダイアログのネストしたイベントループからポーリングが再入してもダイアログを重ねて表示しない。終了処理開始後の古い確認要求は表示しない。
+- module/utility/youtube_api_client/youtube_api_client.py：Tkinterおよびtk_notificationsへの依存を除去。従来通知対象だった事象を result_data["notifications"] に stage/kind/title/message の機械可読情報として返し、既存の3要素タプルを維持する。
+- 旧 confirm_continuation_gui()／BooleanVar／wait_variable方式と旧ワーカー起動互換経路を撤去した。
+
+### 実装後の検証状態
+
+この記録時点で、Stage 3専用の新規テストコード、GUI統合テスト、実デスクトップ受入確認は未実施である。既存回帰テストのStage 3実装後の実行結果も未報告であり、Stage 2後の50件成功記録をStage 3の検証結果として扱わない。既存テストのうち module/utility/youtube_api_client/test_youtube_api_client.py は、削除済みの youtube_api_client.tk_notifications を複数箇所でpatchしているため、Issue #20で新しい通知返却契約に合わせたテスト修正が必要である。
