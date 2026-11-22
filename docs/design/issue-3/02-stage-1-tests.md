@@ -116,7 +116,7 @@ Stage 1は共通基盤の導入段階であり、既存の取得処理すべて�
 - 完了後に次のワーカーを起動できる。
 - 起動失敗後に内部参照が残らず、次の起動を妨げない。
 
-注：`test_main.py` の `test_finish_worker_restores_widgets_and_saved_file_paths` および `test_finish_worker_keeps_json_button_disabled_without_saved_files` には、Stage 2テスト仕様 §6・§7が定める取得結果・保存結果のGUI反映に関する追加の回帰確認が含まれる。これらは統合済み実装の補助的なクロスStage確認として保持するが、その結果をStage 1の合否条件には含めず、Stage 2新規テスト群の実装・検証完了とも扱わない。
+注：`test_main.py` には、`test_finish_worker_restores_widgets_and_saved_file_paths`、`test_finish_worker_keeps_json_button_disabled_without_saved_files`、`test_real_event_loop_processes_worker_requests_before_releasing_handle` の3テストに、Stage 2テスト仕様 §3・§4・§6・§7が定める進捗・通知の実処理接続や取得結果・保存結果のGUI反映に関する補助的なクロスStage確認が含まれる。最後の統合テストはStage 1のキュー処理・完了順序の確認も兼ねる。これらのStage 2側アサーションは統合済み実装の補助的な回帰確認として保持するが、その結果をStage 1の合否条件には含めず、Stage 2新規テスト群の実装・検証完了とも扱わない。
 
 ## 7. GUI統合テスト
 
@@ -217,6 +217,6 @@ GUI不要の単体テストと実Tkイベントループを使う統合テスト
 - 追加統合テストは実Tkイベントループと実際の `_start_scrape_process()`／`_scrape_comments_task()` 経路を使用し、YouTube APIクライアントとJSON保存関数をモック化した。進捗1件・通知55件（合計56要求）、payload内にTkinterオブジェクトがないこと、GUI更新・通知表示がメインスレッドで実行されること、キューが空になり通知55件を処理した後にWorkerHandleが解放されることを確認した。
 - JSON保存関数 `json_data_handler.save_json_to_file` について `assert_not_called()` を追加し、統合テストが実ファイル保存を呼び出さないことも明示的に確認した。
 - `test_main.py` の25件には上記の追加統合テストが含まれる。 `module/utility/tk_async_tasks/test_tk_async_tasks.py` は16件であり、Stage 1テスト用の2ファイル計41テストケースを含む。全体91件には、PR #27マージ後の既存テスト50件も含まれる。
-- `test_main.py` のうち2テストにはStage 2の取得結果・保存結果GUI反映に関する補助的なクロスStage回帰確認が含まれる。これらはStage 1の合否条件やStage 2新規テスト群の完了には算入しない（Stage 1仕様 §6およびStage 2仕様 §9.1参照）。
+- `test_main.py` のうち3テストにはStage 2の進捗・通知の実処理接続または取得結果・保存結果GUI反映に関する補助的なクロスStage回帰確認が含まれる。このうち実イベントループ統合テストはStage 1のキュー処理・完了順序も検証する。Stage 2側のアサーションはStage 1の合否条件やStage 2新規テスト群の完了には算入しない（Stage 1仕様 §6およびStage 2仕様 §9.1参照）。
 - ログ中の例外・警告は異常系テストが意図的に発生させたものであり、各テストは `ok`、各テスト実行は `OK` で終了した。
 - この最終再実行により、ファイル保存ガード追加後のStage 1テスト群と全体回帰テストの実行成功を確認した。Stage 2～4の専用新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認は別工程であり、本結果に含まれない。
