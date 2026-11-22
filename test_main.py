@@ -316,7 +316,8 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
             app, exception=RuntimeError("worker failed")
         )
 
-        app._finish_worker(handle)
+        with self.assertLogs(main.logger, level="ERROR"):
+            app._finish_worker(handle)
         self.assertIs(app.worker_handle, handle)
         request = app.gui_request_queue.get_nowait()
         self.assertEqual(request.kind, "notification")
