@@ -500,6 +500,11 @@ class YouTubeCommentScraperApp:
             self._shutdown_requested = True
             return
 
+        # 終了処理の開始点で要求フラグを解除する。
+        # モーダル表示終了直後からここへ到達するまではフラグを維持し、
+        # 保留中のモーダル要求が終了確認より先に再表示されるのを防ぐ。
+        self._shutdown_requested = False
+
         handle = self.worker_handle
         if handle is None:
             self._shutdown_state = "stopping"
@@ -802,7 +807,6 @@ class YouTubeCommentScraperApp:
             if self._shutdown_state == "confirming":
                 self._shutdown_state = "running"
         if self._shutdown_requested and self._shutdown_state == "running":
-            self._shutdown_requested = False
             try:
                 self.master.after_idle(self._begin_shutdown)
             except tk.TclError:
