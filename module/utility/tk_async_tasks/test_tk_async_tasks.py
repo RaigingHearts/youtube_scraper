@@ -229,7 +229,7 @@ class RunTaskInThreadTests(unittest.TestCase):
     def test_legacy_tk_misc_argument_is_rejected_before_thread_creation(self):
         with patch.object(tk_async_tasks.threading, "Thread") as thread_class:
             with self.assertRaises(TypeError):
-                tk_async_tasks.run_task_in_thread(lambda _handle: None, tk_async_tasks.tk.Misc)
+                tk_async_tasks.run_task_in_thread(lambda _handle: None, tk_async_tasks.tk.Misc())
 
         thread_class.assert_not_called()
 
