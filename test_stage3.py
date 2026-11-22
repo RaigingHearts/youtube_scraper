@@ -384,7 +384,7 @@ class ModalDialogSerializationTests(Stage3AppTestCase):
         displayed = []
         second = tk_async_tasks.GuiRequest(
             kind="notification",
-            payload={"kind": "info", "title": "second", "message": ""},
+            payload={"kind": "warning", "title": "second", "message": ""},
         )
 
         def show_first(title, message, parent=None):
