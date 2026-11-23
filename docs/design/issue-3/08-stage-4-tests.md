@@ -92,9 +92,10 @@ Python 3.8.10/unittest環境で終了制御、協調的キャンセル、部分�
 - 対象ブランチ：`feature/issue-20-stage-1-tests`
 - 対象コミット：`0fe2eac`
 - 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
-- `python -m unittest test_stage4 -v)：41 tests、0.236秒、`OK`。
-- `python -m unittest discover -v)：181 tests、2.973秒、`OK`。
-- `test_integration.py)：実Tkイベントループ統合テスト3件、全件成功。
+- `python -m unittest test_stage4 -v`：41 tests、0.236秒、`OK`。
+- `python -m unittest discover -v`：181 tests、2.973秒、`OK`。
+- 現行の `test_main.py`：27テスト（以前の25件から、mainloop終了とroot破棄順序を確認する2件を追加）。
+- `test_integration.py`：実Tkイベントループ統合テスト3件、全件成功。
 
 実Tk統合テスト3件は、ワーカー確認要求への応答、終了キャンセル後の保留モーダルFIFO再開、終了確定時の確認要求解除と通知サマリー表示を対象とする。終了確定シナリオではmainloop終了前にrootが破棄されないこと、終了時通知サマリーが一度だけ表示されること、Tclコールバックのライフサイクルを確認した。
 
