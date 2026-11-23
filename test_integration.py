@@ -1375,5 +1375,154 @@ class TkStageIntegrationTests(unittest.TestCase):
             self.assertEqual(selected_paths, [expected_path])
 
 
+
+    def test_real_event_loop_preserves_partial_save_results_after_file_failure(self):
+        app = self.make_app()
+        app.api_key = "integration-test-api-key"
+        video_id = "abcdefghijk"
+        video_response = {"items": [{"id": video_id, "snippet": {"title": "save test"}}]}
+        channel_response = {"items": [{"id": "channel-1"}]}
+        comment_responses = [{"items": [{"id": "comment-1"}]}]
+        reply_responses = [{"items": [{"id": "reply-1"}]}]
+        fetch_result = {
+            "fetch_status": "complete",
+            "video_info_raw_response": video_response,
+            "channel_info_raw_response": channel_response,
+            "comment_threads_raw_responses": comment_responses,
+            "comment_replies_raw_responses": reply_responses,
+            "notifications": [],
+        }
+
+        save_calls = []
+
+        def save_file(data, filename, output_dir=None):
+            save_calls.append((data, filename, output_dir))
+            if len(save_calls) == 2:
+                raise OSError("simulated channel file failure")
+            return True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            virtual_main_file = os.path.join(
+                temporary_directory, "application", "main.py"
+            )
+            with patch.object(main, "__file__", virtual_main_file):
+                with patch.object(
+                    main.youtube_api_client,
+                    "fetch_all_comments",
+                    return_value=(fetch_result, 1, 1),
+                ) as fetch_comments:
+                    with patch.object(
+                        main.json_data_handler,
+                        "save_json_to_file",
+                        side_effect=save_file,
+                    ) as save_json:
+                        with patch.object(
+                            main.tk_notifications, "show_info"
+                        ) as show_info:
+                            with patch.object(
+                                main.tk_notifications, "show_warning"
+                            ) as show_warning:
+                                handle = tk_async_tasks.run_task_in_thread(
+                                    app._scrape_comments_task,
+                                    app.gui_request_queue,
+                                    video_id,
+                                )
+                                app.worker_handle = handle
+                                app._schedule_gui_request_polling()
+                                self.run_event_loop_until(
+                                    lambda: handle.done_event.is_set()
+                                    and app.worker_handle is None
+                                )
+
+            fetch_comments.assert_called_once()
+            self.assertIsNone(handle.exception)
+            self.assertTrue(handle.done_event.is_set())
+            self.assertIsNotNone(handle.thread)
+            self.assertFalse(handle.thread.is_alive())
+            self.assertEqual(handle.result["fetch_result"], fetch_result)
+
+            expected_output_directory = os.path.join(
+                os.path.dirname(os.path.abspath(virtual_main_file)),
+                handle.result["output_folder_name"],
+            )
+            expected_filenames = [
+                "video_info_raw_{}.json".format(video_id),
+                "channel_info_raw_channel-1.json",
+                "comments_raw_{}.json".format(video_id),
+                "comment_replies_raw_{}.json".format(video_id),
+            ]
+            self.assertEqual(save_json.call_count, 4)
+            self.assertEqual(
+                [call[1] for call in save_calls], expected_filenames
+            )
+            self.assertTrue(
+                all(call[2] == expected_output_directory for call in save_calls)
+            )
+            self.assertIs(save_calls[0][0], video_response)
+            self.assertIs(save_calls[1][0], channel_response)
+            self.assertIs(save_calls[2][0], comment_responses)
+            self.assertIs(save_calls[3][0], reply_responses)
+
+            expected_records = [
+                {
+                    "kind": "video_info",
+                    "path": os.path.join(
+                        expected_output_directory, expected_filenames[0]
+                    ),
+                    "success": True,
+                },
+                {
+                    "kind": "channel_info",
+                    "path": os.path.join(
+                        expected_output_directory, expected_filenames[1]
+                    ),
+                    "success": False,
+                    "error": "OSError: simulated channel file failure",
+                },
+                {
+                    "kind": "comments",
+                    "path": os.path.join(
+                        expected_output_directory, expected_filenames[2]
+                    ),
+                    "success": True,
+                },
+                {
+                    "kind": "replies",
+                    "path": os.path.join(
+                        expected_output_directory, expected_filenames[3]
+                    ),
+                    "success": True,
+                },
+            ]
+            self.assertEqual(handle.partial_result["saved_files"], expected_records)
+            self.assertEqual(handle.result["saved_files"], expected_records)
+
+            self.assertEqual(
+                app.last_saved_video_info_file_path, expected_records[0]["path"]
+            )
+            self.assertIsNone(app.last_saved_channel_info_file_path)
+            self.assertEqual(
+                app.last_saved_comment_file_path, expected_records[2]["path"]
+            )
+            self.assertEqual(
+                app.last_saved_replies_file_path, expected_records[3]["path"]
+            )
+            app.open_json_button.config.assert_any_call(state=tk.NORMAL)
+            app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+            show_info.assert_not_called()
+            show_warning.assert_called_once()
+            warning_args = show_warning.call_args.args
+            self.assertEqual(warning_args[0], "ファイル保存に一部失敗")
+            self.assertIn(expected_filenames[1], warning_args[1])
+            self.assertIn("保存に失敗したファイル", warning_args[1])
+
+            self.assertIsNone(app.worker_handle)
+            self.assertEqual(app._shutdown_state, "running")
+            self.assertTrue(app.gui_request_queue.empty())
+            self.assertEqual(app._pending_modal_requests, [])
+            self.assertFalse(app._dialog_active)
+            self.assertTrue(self.root.winfo_exists())
+
+
 if __name__ == "__main__":
     unittest.main()
