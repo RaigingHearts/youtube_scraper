@@ -607,5 +607,314 @@ class TkStageIntegrationTests(unittest.TestCase):
         )
 
 
+
+    def test_real_event_loop_interleaves_worker_progress_notifications_and_confirmation(self):
+        app = self.make_app()
+        main_thread_id = threading.current_thread().ident
+
+        first_dialog_opened = threading.Event()
+        second_requests_queued = threading.Event()
+
+        observed_requests = []
+        confirmation_requests = []
+        pending_kinds_during_first_modal = []
+        progress_updates = []
+        notification_thread_ids = []
+        confirmation_thread_ids = []
+        worker_completion_snapshots = []
+
+        modal_depth = {"current": 0, "maximum": 0}
+
+        original_put = app.gui_request_queue.put
+        original_finish_worker = app._finish_worker
+
+        def observe_put(request, *args, **kwargs):
+            result = original_put(request, *args, **kwargs)
+            if isinstance(request, tk_async_tasks.GuiRequest):
+                observed_requests.append(request)
+                if request.kind == "confirmation":
+                    confirmation_requests.append(request)
+                    second_requests_queued.set()
+            return result
+
+        def record_finish_worker(worker_handle):
+            worker_completion_snapshots.append(
+                {
+                    "queue_empty": app.gui_request_queue.empty(),
+                    "pending_modal_requests": list(
+                        app._pending_modal_requests
+                    ),
+                    "dialog_active": app._dialog_active,
+                    "processing_pending": (
+                        app._processing_pending_modal_requests
+                    ),
+                }
+            )
+            return original_finish_worker(worker_handle)
+
+        app.gui_request_queue.put = observe_put
+        app._finish_worker = record_finish_worker
+
+        def task(handle):
+            handle.publish_progress({
+                "current_comments": 3,
+                "total_comments": 10,
+                "message": "first worker progress",
+            })
+
+            handle.gui_request_queue.put(
+                tk_async_tasks.GuiRequest(
+                    kind="notification",
+                    payload={
+                        "kind": "info",
+                        "title": "initial notification",
+                        "message": "first worker notification",
+                    },
+                )
+            )
+
+            if not first_dialog_opened.wait(2):
+                raise RuntimeError(
+                    "最初の通知ダイアログが開かれませんでした。"
+                )
+
+            handle.gui_request_queue.put(
+                tk_async_tasks.GuiRequest(
+                    kind="notification",
+                    payload={
+                        "kind": "info",
+                        "title": "additional notification",
+                        "message": "notification queued during first modal",
+                    },
+                )
+            )
+
+            confirmed = handle.request_confirmation(
+                "continue after queued notifications"
+            )
+            if not confirmed:
+                raise RuntimeError(
+                    "確認要求が肯定応答されませんでした。"
+                )
+
+            handle.publish_progress({
+                "current_comments": 7,
+                "total_comments": 10,
+                "message": "second worker progress",
+            })
+
+            return {
+                "confirmed": confirmed,
+                "status": "completed",
+            }
+
+        handle = tk_async_tasks.run_task_in_thread(
+            task, app.gui_request_queue
+        )
+        app.worker_handle = handle
+
+        def open_recorded_dialog(name, on_open=None):
+            modal_depth["current"] += 1
+            modal_depth["maximum"] = max(
+                modal_depth["maximum"], modal_depth["current"]
+            )
+            try:
+                self.run_nested_dialog(name, on_open)
+            finally:
+                modal_depth["current"] -= 1
+
+        def show_notification(title, _message, **_kwargs):
+            notification_thread_ids.append(
+                threading.current_thread().ident
+            )
+
+            if title == "initial notification":
+                def collect_requests_while_modal_is_active():
+                    first_dialog_opened.set()
+
+                    # ワーカーが追加通知と確認要求を登録するまでEventで同期する。
+                    queued = second_requests_queued.wait(2)
+                    if queued:
+                        # 実際のポーリング処理で両要求を保留キューへ取り込む。
+                        app._poll_gui_requests()
+                        pending_kinds_during_first_modal.extend(
+                            request.kind
+                            for request in app._pending_modal_requests
+                        )
+
+                open_recorded_dialog(
+                    title, collect_requests_while_modal_is_active
+                )
+            else:
+                open_recorded_dialog(title)
+
+        def ask_confirmation(*_args, **_kwargs):
+            confirmation_thread_ids.append(
+                threading.current_thread().ident
+            )
+            open_recorded_dialog("worker confirmation")
+            return True
+
+        def record_progress(
+            _label, _bar, current, total, message
+        ):
+            progress_updates.append(
+                (
+                    current,
+                    total,
+                    message,
+                    threading.current_thread().ident,
+                )
+            )
+
+        app._schedule_gui_request_polling()
+
+        try:
+            with patch.object(
+                main.tk_notifications,
+                "show_info",
+                side_effect=show_notification,
+            ):
+                with patch.object(
+                    main.messagebox,
+                    "askyesno",
+                    side_effect=ask_confirmation,
+                ):
+                    with patch.object(
+                        tk_async_tasks,
+                        "_perform_gui_update",
+                        side_effect=record_progress,
+                    ):
+                        self.run_event_loop_until(
+                            lambda: handle.done_event.is_set()
+                            and app.worker_handle is None
+                            and app.gui_request_queue.empty()
+                            and not app._pending_modal_requests
+                        )
+        finally:
+            # 途中失敗時にも確認待ちワーカーを残さない。
+            if handle.thread is not None and handle.thread.is_alive():
+                handle.cancel_for_shutdown()
+                handle.thread.join(timeout=2)
+
+        def contains_tk_object(value):
+            if isinstance(value, tk.Misc):
+                return True
+            if isinstance(value, dict):
+                return any(
+                    contains_tk_object(item)
+                    for item in value.values()
+                )
+            if isinstance(value, (list, tuple, set)):
+                return any(
+                    contains_tk_object(item) for item in value
+                )
+            return False
+
+        self.assertEqual(
+            pending_kinds_during_first_modal,
+            ["notification", "confirmation"],
+        )
+        self.assertEqual(
+            self.dialog_order,
+            [
+                "initial notification",
+                "additional notification",
+                "worker confirmation",
+            ],
+        )
+        self.assertEqual(modal_depth["maximum"], 1)
+        self.assertEqual(modal_depth["current"], 0)
+
+        self.assertEqual(
+            [
+                (current, message)
+                for current, _total, message, _thread_id in progress_updates
+                if message in (
+                    "first worker progress",
+                    "second worker progress",
+                )
+            ],
+            [
+                (3, "first worker progress"),
+                (7, "second worker progress"),
+            ],
+        )
+        self.assertTrue(progress_updates)
+        self.assertTrue(
+            all(
+                thread_id == main_thread_id
+                for _current, _total, _message, thread_id in progress_updates
+            )
+        )
+
+        self.assertEqual(len(notification_thread_ids), 2)
+        self.assertTrue(
+            all(
+                thread_id == main_thread_id
+                for thread_id in notification_thread_ids
+            )
+        )
+        self.assertEqual(
+            confirmation_thread_ids,
+            [main_thread_id],
+        )
+
+        self.assertEqual(
+            [request.kind for request in observed_requests],
+            [
+                "progress",
+                "notification",
+                "notification",
+                "confirmation",
+                "progress",
+            ],
+        )
+        self.assertTrue(
+            all(
+                not contains_tk_object(request.payload)
+                for request in observed_requests
+            ),
+            "GUI要求payloadにTkinterオブジェクトが含まれています。",
+        )
+
+        self.assertEqual(len(confirmation_requests), 1)
+        confirmation = confirmation_requests[0]
+        self.assertTrue(confirmation.answered)
+        self.assertTrue(confirmation.response)
+        self.assertTrue(confirmation.response_event.is_set())
+        self.assertEqual(confirmation.response_reason, "user_response")
+
+        self.assertTrue(handle.done_event.is_set())
+        self.assertIsNone(handle.exception)
+        self.assertEqual(
+            handle.result,
+            {
+                "confirmed": True,
+                "status": "completed",
+            },
+        )
+        self.assertIsNotNone(handle.thread)
+        self.assertFalse(handle.thread.is_alive())
+
+        self.assertTrue(worker_completion_snapshots)
+        self.assertTrue(
+            all(
+                snapshot["queue_empty"]
+                and not snapshot["pending_modal_requests"]
+                and not snapshot["dialog_active"]
+                and not snapshot["processing_pending"]
+                for snapshot in worker_completion_snapshots
+            ),
+            "GUI要求の処理完了前にワーカー完了処理が開始されました。",
+        )
+
+        self.assertIsNone(app.worker_handle)
+        self.assertTrue(app.gui_request_queue.empty())
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertFalse(app._dialog_active)
+        self.assertFalse(app._processing_pending_modal_requests)
+
+
 if __name__ == "__main__":
     unittest.main()
