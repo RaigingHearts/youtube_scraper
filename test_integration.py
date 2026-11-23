@@ -215,30 +215,33 @@ class TkStageIntegrationTests(unittest.TestCase):
             main.tk_notifications, "show_info", side_effect=show_info
         ):
             with patch.object(
-                main.messagebox, "askyesnocancel", return_value=None
-            ) as ask_shutdown:
+                main.tk_notifications, "show_warning", side_effect=show_info
+            ):
                 with patch.object(
-                    main.messagebox, "askyesno",
-                    side_effect=ask_confirmation,
-                ):
-                    self.run_event_loop_until(
-                        lambda: handle.done_event.is_set()
-                        and app.worker_handle is None
-                    )
+                    main.messagebox, "askyesnocancel", return_value=None
+                ) as ask_shutdown:
+                    with patch.object(
+                        main.messagebox, "askyesno",
+                        side_effect=ask_confirmation,
+                    ):
+                        self.run_event_loop_until(
+                            lambda: handle.done_event.is_set()
+                            and app.worker_handle is None
+                        )
 
-        self.assertEqual(ask_shutdown.call_count, 1)
-        self.assertTrue(handle.result)
-        self.assertFalse(handle.cancel_event.is_set())
-        self.assertEqual(
-            self.dialog_order,
-            [
-                "initial notification",
-                "worker confirmation",
-                "queued notification",
-            ],
-        )
-        self.assertEqual(app._shutdown_state, "running")
-        self.assertEqual(app._pending_modal_requests, [])
+            self.assertEqual(ask_shutdown.call_count, 1)
+            self.assertTrue(handle.result)
+            self.assertFalse(handle.cancel_event.is_set())
+            self.assertEqual(
+                self.dialog_order,
+                [
+                    "initial notification",
+                    "worker confirmation",
+                    "queued notification",
+                ],
+            )
+            self.assertEqual(app._shutdown_state, "running")
+            self.assertEqual(app._pending_modal_requests, [])
 
     def test_confirmed_shutdown_answers_pending_confirmation_and_summarizes_notice(self):
         app = self.make_app()
