@@ -95,3 +95,33 @@ Issue #20のStage 3専用テスト24件は、利用者環境（Windows 7 SP1／P
 - 確認待機中の終了要求、遅延応答、ワーカー完了・GUI要求回収との連携を、Stage 4の終了制御を含む全体フローで確認する。
 
 上記は今回のStage 3専用テストでは実施していない。Stage 1・2で実施済みの実Tkイベントループテストや全体135件の成功をもって代替・合格扱いしない。Stage 1～4の全体統合検証で実施し、実行条件と結果を記録する。実デスクトップ受け入れ確認も§8の完了条件として別途残す。
+
+
+## 11. 実Tkイベントループ統合テストの初回実行記録（2026-11-23）
+
+Issue #20の `test_integration.py` に実Tkイベントループを使用する統合テスト3件を追加し、利用者環境で全件成功を確認した。
+
+- `test_real_event_loop_answers_worker_confirmation`：ワーカーからの確認要求をGUIメインスレッドで処理し、応答する。
+- `test_cancelled_shutdown_resumes_pending_modals_in_fifo_order`：終了確認をキャンセルした後、保留中のモーダル要求をFIFO順に再開する。
+- `test_confirmed_shutdown_answers_pending_confirmation_and_summarizes_notice`：終了確定時に未回答確認要求を解除し、通知を終了時サマリーへ集約する。mainloop終了とroot破棄の順序、Tclコールバックの状態も確認する。
+
+テスト終了時にrootを破棄する前に、残存するafter／after_idleコールバックをキャンセルする後始末を追加した。診断結果ではクリーンアップ前に残存コールバック1件、クリーンアップ後は0件であり、テスト間へのコールバック持ち越しを防止した。
+
+同時点の利用者環境での検証結果：
+- `python -m unittest test_stage4 -v`：41 tests、0.236秒、`OK`。
+- `test_integration.py`：3 tests、全件成功。
+- `python -m unittest discover -v`：181 tests、2.973秒、`OK`。
+- 環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
+- 対象ブランチ：`feature/issue-20-stage-1-tests`、対象コミット：`0fe2eac`。
+
+## 12. 全体統合検証の残作業
+
+上記3件は実Tkイベントループ統合の初回シナリオであり、§3～§8に定める全体統合検証の完了を意味しない。少なくとも次の確認を引き続き行う。
+
+- Stage 1～4の各シナリオのうち、今回の3件で直接確認していない連携・異常系・競合条件。
+- API通信中、ページ間待機中、保存開始前／保存中の終了要求と、保存判断バリア・自然終了との競合。
+- 部分取得・複数ファイル保存・保存失敗・予期しない例外を含む終了経路。
+- ワーカー終了、未処理GUI要求回収、結果回収、通知サマリー、WorkerHandle解放、root破棄までの全体順序。
+- 実デスクトップ環境での受入確認。
+
+未実施のシナリオや環境制約は未完了として記録し、既存のStage別テストや全体181件の成功で代替合格としない。
