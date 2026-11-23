@@ -276,33 +276,40 @@ class TkStageIntegrationTests(unittest.TestCase):
         original_poll = app._poll_gui_requests
         original_schedule = app._schedule_gui_request_polling
         original_quit = app.master.quit
-        original_register = self.root._register
-        original_deletecommand = self.root.deletecommand
-        original_after = self.root.after
-        original_after_cancel = self.root.after_cancel
+        original_register = tk.Misc._register
+        original_deletecommand = tk.Misc.deletecommand
+        original_after = tk.Misc.after
+        original_after_cancel = tk.Misc.after_cancel
         tcl_lifecycle_events = []
         after_command_map = {}
+
+        def widget_label(widget):
+            try:
+                return "{}:{}".format(type(widget).__name__, str(widget))
+            except tk.TclError:
+                return type(widget).__name__
 
         def callback_label(func):
             return getattr(func, "__name__", type(func).__name__)
 
-        def record_register(func, *args, **kwargs):
-            command_name = original_register(func, *args, **kwargs)
+        def record_register(widget, func, *args, **kwargs):
+            command_name = original_register(widget, func, *args, **kwargs)
             tcl_lifecycle_events.append(
-                ("register", command_name, callback_label(func))
+                ("register", widget_label(widget), command_name, callback_label(func))
             )
             return command_name
 
-        def record_deletecommand(command_name):
+        def record_deletecommand(widget, command_name):
             tcl_lifecycle_events.append(
-                ("deletecommand", command_name, command_name in after_command_map.values())
+                ("deletecommand", widget_label(widget), command_name,
+                 command_name in after_command_map.values())
             )
-            return original_deletecommand(command_name)
+            return original_deletecommand(widget, command_name)
 
-        def record_after(ms, func=None, *args):
-            after_id = original_after(ms, func, *args)
+        def record_after(widget, ms, func=None, *args):
+            after_id = original_after(widget, ms, func, *args)
             try:
-                after_info = self.root.tk.call("after", "info", after_id)
+                after_info = widget.tk.call("after", "info", after_id)
             except tk.TclError as exc:
                 after_info = "inspection failed: {}".format(exc)
             command_name = None
@@ -310,30 +317,26 @@ class TkStageIntegrationTests(unittest.TestCase):
                 command_name = after_info[0]
             after_command_map[after_id] = command_name
             tcl_lifecycle_events.append(
-                ("after", after_id, ms, callback_label(func) if func else None,
-                 command_name, after_info)
+                ("after", widget_label(widget), after_id, ms,
+                 callback_label(func) if func else None, command_name, after_info)
             )
             return after_id
 
-        def record_after_cancel(after_id):
+        def record_after_cancel(widget, after_id):
             command_name = after_command_map.get(after_id)
             try:
-                before = self.root.tk.call("after", "info", after_id)
+                before = widget.tk.call("after", "info", after_id)
             except tk.TclError as exc:
                 before = "inspection failed: {}".format(exc)
             tcl_lifecycle_events.append(
-                ("after_cancel_before", after_id, command_name, before)
+                ("after_cancel_before", widget_label(widget), after_id,
+                 command_name, before)
             )
-            result = original_after_cancel(after_id)
+            result = original_after_cancel(widget, after_id)
             tcl_lifecycle_events.append(
-                ("after_cancel_after", after_id, command_name)
+                ("after_cancel_after", widget_label(widget), after_id, command_name)
             )
             return result
-
-        self.root._register = record_register
-        self.root.deletecommand = record_deletecommand
-        self.root.after = record_after
-        self.root.after_cancel = record_after_cancel
 
         def record_poll():
             shutdown_diagnostics["poll_depth"] += 1
@@ -391,21 +394,25 @@ class TkStageIntegrationTests(unittest.TestCase):
         app._schedule_gui_request_polling = record_schedule
         app.master.quit = record_quit
         app._schedule_gui_request_polling()
-        with patch.object(
-            main.tk_notifications, "show_info", side_effect=show_info
-        ):
-            with patch.object(
-                main.messagebox, "askyesnocancel", return_value=True
-            ) as ask_shutdown:
-                with patch.object(
-                    main.messagebox, "askyesno"
-                ) as ask_worker_confirmation:
-                    with patch.object(
-                        main.messagebox, "showinfo"
-                    ) as show_summary:
-                        self.run_event_loop_until(
-                            lambda: app._shutdown_state == "closed"
-                        )
+        with patch.object(tk.Misc, "_register", record_register):
+            with patch.object(tk.Misc, "deletecommand", record_deletecommand):
+                with patch.object(tk.Misc, "after", record_after):
+                    with patch.object(tk.Misc, "after_cancel", record_after_cancel):
+                        with patch.object(
+                            main.tk_notifications, "show_info", side_effect=show_info
+                        ):
+                            with patch.object(
+                                main.messagebox, "askyesnocancel", return_value=True
+                            ) as ask_shutdown:
+                                with patch.object(
+                                    main.messagebox, "askyesno"
+                                ) as ask_worker_confirmation:
+                                    with patch.object(
+                                        main.messagebox, "showinfo"
+                                    ) as show_summary:
+                                        self.run_event_loop_until(
+                                            lambda: app._shutdown_state == "closed"
+                                        )
 
         self.assertEqual(ask_shutdown.call_count, 1)
         ask_worker_confirmation.assert_not_called()
