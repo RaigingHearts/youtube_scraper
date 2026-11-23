@@ -726,3 +726,65 @@ class Stage2RealEventLoopIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SaveNamingConventionTests(unittest.TestCase):
+    def test_output_directory_and_all_raw_filenames_follow_existing_conventions(self):
+        app = make_app()
+        handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        fetch_result = make_fetch_result(
+            fetch_status="partial",
+            video_info={"items": [{"id": "video"}]},
+            channel_info={"items": [{"id": "channel-123"}]},
+            comments=[{"items": [{"id": "comment"}]}],
+            replies=[{"items": [{"id": "reply"}]}],
+        )
+
+        class FixedDateTime:
+            @classmethod
+            def now(cls):
+                class FixedMoment:
+                    @staticmethod
+                    def strftime(_format):
+                        return "2026-11-23_12_34_56"
+                return FixedMoment()
+
+        with patch.object(main, "datetime", FixedDateTime):
+            with patch.object(
+                main.youtube_api_client,
+                "fetch_all_comments",
+                return_value=(fetch_result, 2, 5),
+            ):
+                with patch.object(
+                    main.json_data_handler, "save_json_to_file", return_value=True
+                ) as save_file:
+                    result = app._scrape_comments_task(handle, "abcdefghijk")
+
+        expected_folder = "youtube_data_abcdefghijk_2026-11-23_12_34_56"
+        expected_output_dir = os.path.join(
+            os.path.dirname(os.path.abspath(main.__file__)), expected_folder
+        )
+        expected_calls = [
+            ({"items": [{"id": "video"}]}, "video_info_raw_abcdefghijk.json"),
+            ({"items": [{"id": "channel-123"}]}, "channel_info_raw_channel-123.json"),
+            ([{"items": [{"id": "comment"}]}], "comments_raw_abcdefghijk.json"),
+            ([{"items": [{"id": "reply"}]}], "comment_replies_raw_abcdefghijk.json"),
+        ]
+
+        self.assertEqual(result["output_folder_name"], expected_folder)
+        self.assertEqual(
+            [record["kind"] for record in result["saved_files"]],
+            ["video_info", "channel_info", "comments", "replies"],
+        )
+        self.assertEqual(save_file.call_count, 4)
+        self.assertEqual(
+            [
+                (call.args[0], call.args[1])
+                for call in save_file.call_args_list
+            ],
+            expected_calls,
+        )
+        self.assertTrue(
+            all(call.kwargs == {"output_dir": expected_output_dir}
+                for call in save_file.call_args_list)
+        )
