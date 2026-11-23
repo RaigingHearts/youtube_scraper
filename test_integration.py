@@ -1107,18 +1107,6 @@ class TkStageIntegrationTests(unittest.TestCase):
             execute_video_request
         )
 
-        handle = tk_async_tasks.run_task_in_thread(
-            app._scrape_comments_task,
-            app.gui_request_queue,
-            "abcdefghijk",
-        )
-        app.worker_handle = handle
-
-        self.assertTrue(
-            api_execute_started.wait(2),
-            "ワーカーが動画情報APIのexecute()へ到達しませんでした。",
-        )
-
         def ask_shutdown_confirmation(*_args, **_kwargs):
             def observe_visible_shutdown_dialog():
                 dialog_observations.append({
@@ -1148,7 +1136,6 @@ class TkStageIntegrationTests(unittest.TestCase):
             self.root.after_idle(release_api_execute.set)
 
         app._schedule_gui_request_polling()
-        self.root.after_idle(request_shutdown_during_api_call)
 
         try:
             with patch.object(
@@ -1169,6 +1156,20 @@ class TkStageIntegrationTests(unittest.TestCase):
                         with patch.object(
                             main.messagebox, "showinfo"
                         ) as shutdown_summary:
+                            # APIクライアントのモックを適用した状態でワーカーを起動する。
+                            handle = tk_async_tasks.run_task_in_thread(
+                                app._scrape_comments_task,
+                                app.gui_request_queue,
+                                "abcdefghijk",
+                            )
+                            app.worker_handle = handle
+
+                            self.assertTrue(
+                                api_execute_started.wait(2),
+                                "ワーカーが動画情報APIのexecute()へ到達しませんでした。",
+                            )
+                            self.root.after_idle(request_shutdown_during_api_call)
+
                             self.run_event_loop_until(
                                 lambda: handle.done_event.is_set()
                                 and app.worker_handle is None
