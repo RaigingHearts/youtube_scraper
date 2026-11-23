@@ -183,7 +183,7 @@ Issue #3のStage 1～4の実装作業中は、各Stageの新規テスト仕様�
 - 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`
 - `python -m unittest test_stage3 -v)：24 tests、0.145秒、`OK`
 - `python -m unittest test_main -v)：25 tests、0.768秒、`OK`
-- `python -m unittest discover -v)：135 tests、2.198秒、`OK`
+- `python -m unittest discover -v`：135 tests、2.198秒、`OK`
 - `git status -sb`：ローカルブランチとorigin追跡ブランチは同期。tracked filesの変更なし。未追跡ファイル `issue3-comment.md` は維持。
 - `git diff --check`：エラーなし。
 
@@ -233,9 +233,10 @@ Stage 3専用テストは24件。確認要求のEventライフサイクル・競
 - ブランチ：`feature/issue-20-stage-1-tests`。
 - 対象コミット：`0fe2eac`。
 - 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
-- `python -m unittest test_stage4 -v)：41 tests、0.236秒、`OK`。
+- `python -m unittest test_stage4 -v`：41 tests、0.236秒、`OK`。
 - `test_integration.py`：実Tkイベントループ統合テスト3件、全件成功。
-- `python -m unittest discover -v)：181 tests、2.973秒、`OK`。
+- `python -m unittest discover -v`：181 tests、2.973秒、`OK`。
+- 現行の `test_main.py`：27テスト（以前の25件から、mainloop終了とroot破棄順序を確認する2件を追加）。
 
 実Tk統合テストは、ワーカー確認要求、終了キャンセル後の保留モーダルFIFO再開、終了確定時の確認要求解除・通知サマリー表示を検証した。終了確定テストではmainloop終了前にrootが破棄されないこと、およびTclコールバックの登録・解除状態を診断した。
 
