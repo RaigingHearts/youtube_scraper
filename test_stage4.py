@@ -167,6 +167,7 @@ class ShutdownModalBoundaryTests(Stage4AppTestCase):
 
     def test_s4_39_close_during_modal_waits_for_dialog_then_confirms_before_fifo_resume(self):
         app = self.make_app()
+        self.make_running_handle(app)
         active = tk_async_tasks.GuiRequest(
             kind="notification",
             payload={"kind": "info", "title": "Active", "message": "active"},
