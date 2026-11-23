@@ -87,11 +87,7 @@ class TkStageIntegrationTests(unittest.TestCase):
         root = getattr(self, "root", None)
         try:
             if root is not None:
-                try:
-                    if root.winfo_exists():
-                        root.destroy()
-                except tk.TclError:
-                    pass
+                # root.destroy()前に採取し、終了時点のタイマーとコマンドを保持する。
                 try:
                     pending = [
                         (after_id, root.tk.call("after", "info", after_id))
@@ -115,6 +111,11 @@ class TkStageIntegrationTests(unittest.TestCase):
                             }
                         )
                     )
+                try:
+                    if root.winfo_exists():
+                        root.destroy()
+                except tk.TclError:
+                    pass
         finally:
             for patcher in reversed(getattr(self, "tk_trace_patchers", [])):
                 patcher.stop()
