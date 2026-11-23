@@ -393,11 +393,26 @@ class TkStageIntegrationTests(unittest.TestCase):
         app._poll_gui_requests = record_poll
         app._schedule_gui_request_polling = record_schedule
         app.master.quit = record_quit
-        app._schedule_gui_request_polling()
         with patch.object(tk.Misc, "_register", record_register):
             with patch.object(tk.Misc, "deletecommand", record_deletecommand):
                 with patch.object(tk.Misc, "after", record_after):
                     with patch.object(tk.Misc, "after_cancel", record_after_cancel):
+                        # 初回予約も監視対象に含め、登録から終了までの履歴を連続させる。
+                        app._schedule_gui_request_polling()
+                        try:
+                            initial_pending = [
+                                (after_id, self.root.tk.call("after", "info", after_id))
+                                for after_id in self.root.tk.call("after", "info")
+                            ]
+                        except tk.TclError as exc:
+                            initial_pending = "inspection failed: {}".format(exc)
+                        tcl_lifecycle_events.append(
+                            (
+                                "initial_schedule_snapshot",
+                                initial_pending,
+                                list(self.root._tclCommands or []),
+                            )
+                        )
                         with patch.object(
                             main.tk_notifications, "show_info", side_effect=show_info
                         ):
