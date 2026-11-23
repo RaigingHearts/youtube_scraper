@@ -18,7 +18,8 @@ class LogViewerTests(unittest.TestCase):
                 log_viewer, "ScrolledText", return_value=self.text_area
             ):
                 with patch.object(log_viewer.tk, "Button", return_value=self.button):
-                    window = log_viewer.show_log_window(parent=MagicMock())
+                    with patch.object(log_viewer.os.path, "exists", return_value=False):
+                        window = log_viewer.show_log_window(parent=MagicMock())
         self.assertIs(window, self.window)
         # show_log_window performs an initial load; isolate each test's explicit refresh.
         self.text_area.reset_mock()
