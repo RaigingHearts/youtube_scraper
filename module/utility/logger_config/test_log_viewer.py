@@ -1,7 +1,7 @@
 """ログ閲覧ウィンドウのファイル読み込み・表示動作を検証する。"""
 
 import unittest
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
 from module.utility.logger_config import log_viewer
 
@@ -63,15 +63,31 @@ class LogViewerTests(unittest.TestCase):
         self.assertIn("access denied", displayed_message)
         self.assertTrue(captured.output)
 
-    def test_refresh_button_reloads_log_content(self):
+    def test_refresh_button_reloads_latest_log_content(self):
         refresh = self.show_window()
-        file_handle = mock_open(read_data="最新ログ").return_value
+        earlier_handle = mock_open(read_data="前回のログ").return_value
+        latest_handle = mock_open(read_data="最新ログ").return_value
         with patch.object(log_viewer.os.path, "exists", return_value=True):
-            with patch("builtins.open", return_value=file_handle) as open_file:
+            with patch(
+                "builtins.open",
+                side_effect=[earlier_handle, latest_handle],
+            ) as open_file:
+                refresh()
                 refresh()
 
-        self.text_area.delete.assert_called_once_with("1.0", log_viewer.tk.END)
-        open_file.assert_called_once_with(
-            log_viewer.LOG_FILE, "r", encoding="utf-8"
+        self.assertEqual(open_file.call_count, 2)
+        self.assertEqual(
+            open_file.call_args_list,
+            [
+                call(log_viewer.LOG_FILE, "r", encoding="utf-8"),
+                call(log_viewer.LOG_FILE, "r", encoding="utf-8"),
+            ],
         )
-        self.text_area.insert.assert_called_once_with(log_viewer.tk.END, "最新ログ")
+        self.assertEqual(self.text_area.delete.call_count, 2)
+        self.assertEqual(
+            self.text_area.insert.call_args_list,
+            [
+                call(log_viewer.tk.END, "前回のログ"),
+                call(log_viewer.tk.END, "最新ログ"),
+            ],
+        )
