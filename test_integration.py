@@ -2212,7 +2212,7 @@ class TkStageIntegrationTests(unittest.TestCase):
                 with patch.object(
                     main.youtube_api_client,
                     "fetch_all_comments",
-                    return_value=(fetch_result, 0, 0),
+                    side_effect=fetch_after_setup,
                 ) as fetch_comments:
                     with patch.object(
                         main.json_data_handler,
