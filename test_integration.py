@@ -1698,5 +1698,104 @@ class TkStageIntegrationTests(unittest.TestCase):
             self.root = None
 
 
+    def test_real_event_loop_preserves_natural_worker_completion_during_shutdown_confirmation(self):
+        app = self.make_app()
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        worker_finished_during_dialog = []
+
+        saved_path = os.path.join(
+            tempfile.gettempdir(), "integration-comments.json"
+        )
+        worker_result = {
+            "fetched_count": 3,
+            "total_expected": 3,
+            "saved_files": [{
+                "kind": "comments",
+                "path": saved_path,
+                "success": True,
+            }],
+        }
+
+        def task(handle):
+            worker_started.set()
+            if not release_worker.wait(2):
+                raise RuntimeError("worker release event timed out")
+            handle.publish_progress({
+                "current": 3,
+                "maximum": 3,
+                "message": "自然終了直前の進捗",
+            })
+            return worker_result
+
+        handle = tk_async_tasks.run_task_in_thread(
+            task, app.gui_request_queue
+        )
+        app.worker_handle = handle
+        app._schedule_gui_request_polling()
+        self.assertTrue(
+            worker_started.wait(2),
+            "ワーカーが開始されませんでした。",
+        )
+
+        def ask_shutdown(*_args, **_kwargs):
+            def finish_worker_naturally():
+                release_worker.set()
+                worker_finished_during_dialog.append(
+                    handle.done_event.wait(2)
+                )
+
+            self.run_nested_dialog(
+                "shutdown confirmation",
+                finish_worker_naturally,
+            )
+            return True
+
+        self.root.after_idle(app._on_close_request)
+        with patch.object(
+            main.messagebox, "askyesnocancel", side_effect=ask_shutdown
+        ) as ask_dialog:
+            with patch.object(main.messagebox, "showinfo") as shutdown_summary:
+                self.run_event_loop_until(
+                    lambda: handle.done_event.is_set()
+                    and app.worker_handle is None
+                    and app._shutdown_state == "closed"
+                )
+
+        ask_dialog.assert_called_once()
+        self.assertEqual(worker_finished_during_dialog, [True])
+        self.assertTrue(release_worker.is_set())
+        self.assertTrue(handle.done_event.is_set())
+        self.assertFalse(handle.thread.is_alive())
+        self.assertIsNone(handle.exception)
+        self.assertEqual(handle.result, worker_result)
+        self.assertFalse(handle.cancel_event.is_set())
+        self.assertIsNone(handle.cancel_reason)
+        self.assertIsNone(handle.save_policy)
+
+        self.assertEqual(app.last_saved_comment_file_path, saved_path)
+        self.assertEqual(app.total_comments_expected, 3)
+        app.comment_count_label.config.assert_called_once_with(
+            text="取得コメント数: 3 / 3"
+        )
+        app.open_json_button.config.assert_any_call(state=tk.NORMAL)
+        app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+
+        shutdown_summary.assert_not_called()
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app._shutdown_state, "closed")
+        self.assertTrue(app.gui_request_queue.empty())
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertFalse(app._dialog_active)
+        self.assertFalse(app._processing_pending_modal_requests)
+        self.assertIsNone(app._gui_poll_after_id)
+        self.assertTrue(self.root.winfo_exists())
+
+        self.root.destroy()
+        with self.assertRaises(tk.TclError):
+            self.root.winfo_exists()
+        self.root = None
+
+
 if __name__ == "__main__":
     unittest.main()
