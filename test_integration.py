@@ -135,8 +135,8 @@ class TkStageIntegrationTests(unittest.TestCase):
 
     def queue_during_active_modal(self, app, handle):
         """確認要求と通知をモーダル表示中に処理し、終了要求を発行する。"""
-        # ワーカー確認要求を先に処理し、表示中モーダルの後ろへ退避させる。
-        app._poll_gui_requests()
+        # 確認要求に続けて通知を登録し、ネストしたイベントループ内で
+        # ポーリングを一度だけ再入させて、両方を保留列へ退避させる。
         app.gui_request_queue.put(
             tk_async_tasks.GuiRequest(
                 kind="notification",
