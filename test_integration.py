@@ -258,7 +258,7 @@ class TkStageIntegrationTests(unittest.TestCase):
             if title == "initial notification":
                 self.run_nested_dialog(
                     "initial notification",
-                    lambda: self.queue_during_active_modal(app, handle),
+                    lambda: self.queue_during_active_modal(app),
                 )
             else:
                 self.run_nested_dialog(title)
