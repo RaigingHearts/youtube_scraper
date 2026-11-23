@@ -414,18 +414,6 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
         else:
             self.assertIsNone(handle.save_policy)
 
-    def test_s4_41_notification_arriving_after_shutdown_complete_is_aggregated(self):
-        app = self.make_app()
-        app._shutdown_state = "complete"
-        request = self.make_notification("error", "Late error", "late message")
-
-        with patch.object(main.tk_notifications, "show_error") as show_error:
-            app._handle_gui_request(request)
-
-        show_error.assert_not_called()
-        self.assertEqual(app._shutdown_notifications, [request.payload])
-        self.assertEqual(app._pending_modal_requests, [])
-
 
 if __name__ == "__main__":
     unittest.main()
@@ -1152,6 +1140,18 @@ class ShutdownNotificationAndConfirmationTests(Stage4AppTestCase):
         self.assertEqual(request.response_reason, "application_shutdown")
         self.assertTrue(request.response_event.is_set())
         self.assertEqual(handle.cancel_reason, "application_shutdown")
+
+    def test_s4_41_notification_arriving_after_shutdown_complete_is_aggregated(self):
+        app = self.make_app()
+        app._shutdown_state = "complete"
+        request = self.make_notification("error", "Late error", "late message")
+
+        with patch.object(main.tk_notifications, "show_error") as show_error:
+            app._handle_gui_request(request)
+
+        show_error.assert_not_called()
+        self.assertEqual(app._shutdown_notifications, [request.payload])
+        self.assertEqual(app._pending_modal_requests, [])
 
 
 if __name__ == "__main__":
