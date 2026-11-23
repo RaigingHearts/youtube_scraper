@@ -1,0 +1,307 @@
+"""実Tkイベントループ上でStage 3・4の連携を検証する統合テスト。"""
+
+import queue
+import threading
+import tkinter as tk
+import unittest
+from unittest.mock import MagicMock, patch
+
+import main
+from module.utility.tk_async_tasks import tk_async_tasks
+
+
+class TkStageIntegrationTests(unittest.TestCase):
+    """実Tkイベントループを使用し、ダイアログは非表示Toplevelで代替する。"""
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+            self.root.withdraw()
+        except tk.TclError as exc:
+            raise unittest.SkipTest(
+                "Tk GUI環境を利用できないため統合テストをスキップ: {}".format(exc)
+            )
+        self.dialog_order = []
+
+    def tearDown(self):
+        root = getattr(self, "root", None)
+        if root is not None:
+            try:
+                if root.winfo_exists():
+                    root.destroy()
+            except tk.TclError:
+                pass
+
+    def make_app(self):
+        app = main.YouTubeCommentScraperApp.__new__(
+            main.YouTubeCommentScraperApp
+        )
+        app.master = self.root
+        app.gui_request_queue = queue.Queue()
+        app.worker_handle = None
+        app._gui_poll_after_id = None
+        app._dialog_active = False
+        app._pending_modal_requests = []
+        app._processing_pending_modal_requests = False
+        app._shutdown_state = "running"
+        app._shutdown_requested = False
+        app._shutdown_notifications = []
+        app._shutdown_summary_shown = False
+        app.progress_label = MagicMock()
+        app.progress_bar = MagicMock()
+        app.progress_bar.__getitem__.return_value = 100
+        app.comment_count_label = MagicMock()
+        app.scrape_button = MagicMock()
+        app.open_json_button = MagicMock()
+        app.last_saved_comment_file_path = None
+        app.last_saved_video_info_file_path = None
+        app.last_saved_channel_info_file_path = None
+        app.last_saved_replies_file_path = None
+        app.total_comments_expected = 0
+        return app
+
+    def run_nested_dialog(self, name, on_open=None):
+        """wait_window()でネストしたTkイベントループを実行する。"""
+        self.dialog_order.append(name)
+        window = tk.Toplevel(self.root)
+        window.withdraw()
+
+        def finish():
+            if on_open is not None:
+                on_open()
+            self.root.after_idle(window.destroy)
+
+        self.root.after_idle(finish)
+        self.root.wait_window(window)
+
+    def start_confirmation_worker(self, app, message):
+        """確認要求を出すワーカーを起動し、要求のキュー登録を待つ。"""
+        confirmation_queued = threading.Event()
+        original_put = app.gui_request_queue.put
+
+        def observe_put(request, *args, **kwargs):
+            result = original_put(request, *args, **kwargs)
+            if getattr(request, "kind", None) == "confirmation":
+                confirmation_queued.set()
+            return result
+
+        app.gui_request_queue.put = observe_put
+
+        def task(handle):
+            return handle.request_confirmation(message)
+
+        handle = tk_async_tasks.run_task_in_thread(
+            task, app.gui_request_queue
+        )
+        app.worker_handle = handle
+        self.assertTrue(
+            confirmation_queued.wait(2),
+            "ワーカーの確認要求がキューへ登録されませんでした。",
+        )
+        return handle
+
+    def run_event_loop_until(self, predicate, timeout_ms=3000):
+        """条件成立まで実Tkイベントループを回し、時間切れを明示する。"""
+        state = {"check_id": None, "timeout_id": None, "timed_out": False}
+
+        def check_condition():
+            if predicate():
+                self.root.quit()
+                return
+            state["check_id"] = self.root.after(5, check_condition)
+
+        def timeout():
+            state["timed_out"] = True
+            self.root.quit()
+
+        state["check_id"] = self.root.after(0, check_condition)
+        state["timeout_id"] = self.root.after(timeout_ms, timeout)
+        self.root.mainloop()
+
+        for after_id in (
+            state["check_id"],
+            state["timeout_id"],
+        ):
+            if after_id is not None:
+                try:
+                    self.root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+
+        self.assertFalse(
+            state["timed_out"], "Tkイベントループがタイムアウトしました。"
+        )
+        self.assertTrue(predicate(), "終了条件が成立していません。")
+
+    def queue_during_active_modal(self, app, handle):
+        """確認要求と通知をモーダル表示中に処理し、終了要求を発行する。"""
+        # ワーカー確認要求を先に処理し、表示中モーダルの後ろへ退避させる。
+        app._poll_gui_requests()
+        app.gui_request_queue.put(
+            tk_async_tasks.GuiRequest(
+                kind="notification",
+                payload={
+                    "kind": "warning",
+                    "title": "queued notification",
+                    "message": "queued while modal was active",
+                },
+            )
+        )
+        app._poll_gui_requests()
+        self.assertEqual(len(app._pending_modal_requests), 2)
+        self.assertEqual(
+            [request.kind for request in app._pending_modal_requests],
+            ["confirmation", "notification"],
+        )
+        app._on_close_request()
+        self.assertTrue(app._shutdown_requested)
+
+    def test_real_event_loop_answers_worker_confirmation(self):
+        app = self.make_app()
+        handle = self.start_confirmation_worker(app, "continue integration task")
+
+        def ask_confirmation(*_args, **_kwargs):
+            self.run_nested_dialog("worker confirmation")
+            return True
+
+        app._schedule_gui_request_polling()
+        with patch.object(
+            main.messagebox, "askyesno", side_effect=ask_confirmation
+        ):
+            self.run_event_loop_until(
+                lambda: handle.done_event.is_set()
+                and app.worker_handle is None
+            )
+
+        self.assertTrue(handle.result)
+        self.assertTrue(handle.thread is not None)
+        self.assertFalse(handle.thread.is_alive())
+        self.assertEqual(
+            handle.cancel_reason, None,
+            "肯定応答でワーカーのキャンセル理由が設定されています。",
+        )
+        self.assertEqual(self.dialog_order, ["worker confirmation"])
+        self.assertEqual(app._shutdown_state, "running")
+
+    def test_cancelled_shutdown_resumes_pending_modals_in_fifo_order(self):
+        app = self.make_app()
+        app.gui_request_queue.put(
+            tk_async_tasks.GuiRequest(
+                kind="notification",
+                payload={
+                    "kind": "info",
+                    "title": "initial notification",
+                    "message": "first modal",
+                },
+            )
+        )
+        handle = self.start_confirmation_worker(app, "worker confirmation")
+
+        def show_info(title, _message, **_kwargs):
+            if title == "initial notification":
+                self.run_nested_dialog(
+                    "initial notification",
+                    lambda: self.queue_during_active_modal(app, handle),
+                )
+            else:
+                self.run_nested_dialog(title)
+
+        def ask_confirmation(*_args, **_kwargs):
+            self.run_nested_dialog("worker confirmation")
+            return True
+
+        app._schedule_gui_request_polling()
+        with patch.object(
+            main.tk_notifications, "show_info", side_effect=show_info
+        ):
+            with patch.object(
+                main.messagebox, "askyesnocancel", return_value=None
+            ) as ask_shutdown:
+                with patch.object(
+                    main.messagebox, "askyesno",
+                    side_effect=ask_confirmation,
+                ):
+                    self.run_event_loop_until(
+                        lambda: handle.done_event.is_set()
+                        and app.worker_handle is None
+                    )
+
+        self.assertEqual(ask_shutdown.call_count, 1)
+        self.assertTrue(handle.result)
+        self.assertFalse(handle.cancel_event.is_set())
+        self.assertEqual(
+            self.dialog_order,
+            [
+                "initial notification",
+                "worker confirmation",
+                "queued notification",
+            ],
+        )
+        self.assertEqual(app._shutdown_state, "running")
+        self.assertEqual(app._pending_modal_requests, [])
+
+    def test_confirmed_shutdown_answers_pending_confirmation_and_summarizes_notice(self):
+        app = self.make_app()
+        app.gui_request_queue.put(
+            tk_async_tasks.GuiRequest(
+                kind="notification",
+                payload={
+                    "kind": "info",
+                    "title": "initial notification",
+                    "message": "first modal",
+                },
+            )
+        )
+        handle = self.start_confirmation_worker(app, "worker confirmation")
+
+        def show_info(title, _message, **_kwargs):
+            if title == "initial notification":
+                self.run_nested_dialog(
+                    "initial notification",
+                    lambda: self.queue_during_active_modal(app, handle),
+                )
+            else:
+                self.run_nested_dialog(title)
+
+        app._schedule_gui_request_polling()
+        with patch.object(
+            main.tk_notifications, "show_info", side_effect=show_info
+        ):
+            with patch.object(
+                main.messagebox, "askyesnocancel", return_value=True
+            ) as ask_shutdown:
+                with patch.object(
+                    main.messagebox, "askyesno"
+                ) as ask_worker_confirmation:
+                    with patch.object(
+                        main.messagebox, "showinfo"
+                    ) as show_summary:
+                        self.run_event_loop_until(
+                            lambda: app._shutdown_state == "closed"
+                        )
+
+        self.assertEqual(ask_shutdown.call_count, 1)
+        ask_worker_confirmation.assert_not_called()
+        self.assertFalse(handle.result)
+        self.assertTrue(handle.cancel_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+        self.assertEqual(handle.worker_handle if hasattr(handle, "worker_handle") else None, None)
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app._shutdown_state, "closed")
+        self.assertEqual(len(app._shutdown_notifications), 1)
+        self.assertEqual(
+            app._shutdown_notifications[0]["title"], "queued notification"
+        )
+        show_summary.assert_called_once()
+        self.assertIn(
+            "queued notification",
+            show_summary.call_args.args[1],
+        )
+        self.assertIn(
+            "queued while modal was active",
+            show_summary.call_args.args[1],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
