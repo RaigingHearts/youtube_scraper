@@ -711,3 +711,132 @@ class ApiKeyStartupTests(YouTubeCommentScraperAppTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExistingInputWorkflowTests(YouTubeCommentScraperAppTestCase):
+    def setUp(self):
+        self.app = self.make_app()
+        self.app.url_entry = MagicMock()
+        self.app.video_id_entry = MagicMock()
+
+    def test_parse_url_warns_and_stops_when_url_is_empty(self):
+        self.app.url_entry.get.return_value = "   "
+
+        with patch.object(main.tk_notifications, "show_warning") as warning:
+            self.app._parse_url()
+
+        warning.assert_called_once_with(
+            "入力エラー", "URLを入力してください。", parent=self.app.master
+        )
+        self.app.video_id_entry.delete.assert_not_called()
+        self.app.video_id_entry.insert.assert_not_called()
+
+    def test_parse_url_inserts_extracted_video_id_and_shows_success(self):
+        self.app.url_entry.get.return_value = " https://www.youtube.com/watch?v=abcdefghijk "
+
+        with patch.object(
+            main.youtube_utils, "extract_video_id", return_value="abcdefghijk"
+        ) as extract:
+            with patch.object(main.tk_notifications, "show_info") as info:
+                self.app._parse_url()
+
+        extract.assert_called_once_with(
+            "https://www.youtube.com/watch?v=abcdefghijk"
+        )
+        self.app.video_id_entry.delete.assert_called_once_with(0, tk.END)
+        self.app.video_id_entry.insert.assert_called_once_with(0, "abcdefghijk")
+        info.assert_called_once_with(
+            "解析完了", "動画ID: abcdefghijk を解析しました。",
+            parent=self.app.master,
+        )
+
+    def test_parse_url_reports_invalid_url_without_changing_video_id(self):
+        self.app.url_entry.get.return_value = "https://example.invalid/video"
+
+        with patch.object(main.youtube_utils, "extract_video_id", return_value=None):
+            with patch.object(main.tk_notifications, "show_error") as error:
+                with self.assertLogs(main.logger, level="ERROR"):
+                    self.app._parse_url()
+
+        error.assert_called_once_with(
+            "解析失敗", "有効なYouTube URLではありません。",
+            parent=self.app.master,
+        )
+        self.app.video_id_entry.delete.assert_not_called()
+        self.app.video_id_entry.insert.assert_not_called()
+
+    def test_start_scrape_rejects_missing_api_key(self):
+        self.app.api_key = None
+
+        with patch.object(main.tk_notifications, "show_error") as error:
+            with patch.object(tk_async_tasks, "run_task_in_thread") as run_task:
+                self.app._start_scrape_process()
+
+        error.assert_called_once_with(
+            "APIキーエラー", "APIキーが設定されていません。",
+            parent=self.app.master,
+        )
+        run_task.assert_not_called()
+
+    def test_start_scrape_rejects_empty_video_id(self):
+        self.app.api_key = "test-key"
+        self.app.video_id_entry.get.return_value = "  "
+
+        with patch.object(main.tk_notifications, "show_warning") as warning:
+            with patch.object(tk_async_tasks, "run_task_in_thread") as run_task:
+                self.app._start_scrape_process()
+
+        warning.assert_called_once_with(
+            "入力エラー", "動画IDを入力してください。",
+            parent=self.app.master,
+        )
+        run_task.assert_not_called()
+
+    def test_start_scrape_rejects_invalid_video_id(self):
+        self.app.api_key = "test-key"
+        self.app.video_id_entry.get.return_value = "not-a-valid-id"
+
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=False):
+            with patch.object(main.tk_notifications, "show_error") as error:
+                with patch.object(tk_async_tasks, "run_task_in_thread") as run_task:
+                    self.app._start_scrape_process()
+
+        error.assert_called_once_with(
+            "入力エラー",
+            "動画IDは11文字の英数字・ハイフン・アンダースコアで入力してください。",
+            parent=self.app.master,
+        )
+        run_task.assert_not_called()
+
+    def test_start_scrape_resets_gui_and_saved_paths_before_starting_worker(self):
+        self.app.api_key = "test-key"
+        self.app.video_id_entry.get.return_value = "abcdefghijk"
+        self.app.last_saved_comment_file_path = "old-comments.json"
+        self.app.last_saved_video_info_file_path = "old-video.json"
+        self.app.last_saved_channel_info_file_path = "old-channel.json"
+        self.app.last_saved_replies_file_path = "old-replies.json"
+        handle = tk_async_tasks.WorkerHandle(self.app.gui_request_queue)
+
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(
+                tk_async_tasks, "run_task_in_thread", return_value=handle
+            ) as run_task:
+                with patch.object(tk_async_tasks, "_perform_gui_update") as update:
+                    self.app._start_scrape_process()
+
+        run_task.assert_called_once_with(
+            self.app._scrape_comments_task, self.app.gui_request_queue, "abcdefghijk"
+        )
+        self.assertIs(self.app.worker_handle, handle)
+        self.app.scrape_button.config.assert_called_once_with(state=tk.DISABLED)
+        self.app.open_json_button.config.assert_called_once_with(state=tk.DISABLED)
+        update.assert_called_once_with(
+            self.app.progress_label, self.app.progress_bar, 0, 0, "コメント取得中..."
+        )
+        self.app.comment_count_label.config.assert_called_once_with(
+            text="取得コメント数: 0 / 0"
+        )
+        self.assertIsNone(self.app.last_saved_comment_file_path)
+        self.assertIsNone(self.app.last_saved_video_info_file_path)
+        self.assertIsNone(self.app.last_saved_channel_info_file_path)
+        self.assertIsNone(self.app.last_saved_replies_file_path)
