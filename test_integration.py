@@ -916,5 +916,164 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertFalse(app._processing_pending_modal_requests)
 
 
+    def test_real_event_loop_preserves_visible_confirmation_before_shutdown(self):
+        app = self.make_app()
+        confirmation_queued = threading.Event()
+        confirmation_returned = threading.Event()
+        confirmation_requests = []
+        shutdown_prompt_observations = []
+        close_request_observations = []
+        modal_depth = {"current": 0, "maximum": 0}
+
+        original_put = app.gui_request_queue.put
+
+        def observe_put(request, *args, **kwargs):
+            result = original_put(request, *args, **kwargs)
+            if getattr(request, "kind", None) == "confirmation":
+                confirmation_requests.append(request)
+                confirmation_queued.set()
+            return result
+
+        app.gui_request_queue.put = observe_put
+
+        def task(handle):
+            answer = handle.request_confirmation(
+                "continue before application shutdown"
+            )
+            confirmation_returned.set()
+            if not handle.cancel_event.wait(2):
+                raise RuntimeError(
+                    "終了確定後のキャンセル通知を受信できませんでした。"
+                )
+            return answer
+
+        handle = tk_async_tasks.run_task_in_thread(
+            task, app.gui_request_queue
+        )
+        app.worker_handle = handle
+        self.assertTrue(
+            confirmation_queued.wait(2),
+            "ワーカーの確認要求がキューへ登録されませんでした。",
+        )
+        confirmation = confirmation_requests[0]
+
+        def show_nested_dialog(name, on_open=None):
+            modal_depth["current"] += 1
+            modal_depth["maximum"] = max(
+                modal_depth["maximum"], modal_depth["current"]
+            )
+            try:
+                self.run_nested_dialog(name, on_open)
+            finally:
+                modal_depth["current"] -= 1
+
+        def ask_worker_confirmation(*_args, **_kwargs):
+            def request_shutdown_while_confirmation_is_visible():
+                app._on_close_request()
+                close_request_observations.append(
+                    (
+                        app._shutdown_requested,
+                        app._dialog_active,
+                        app._shutdown_state,
+                    )
+                )
+
+            show_nested_dialog(
+                "worker confirmation",
+                request_shutdown_while_confirmation_is_visible,
+            )
+            return True
+
+        def ask_shutdown_confirmation(*_args, **_kwargs):
+            worker_resumed = confirmation_returned.wait(2)
+            shutdown_prompt_observations.append(
+                {
+                    "worker_resumed": worker_resumed,
+                    "answered": confirmation.answered,
+                    "response": confirmation.response,
+                    "response_reason": confirmation.response_reason,
+                    "response_event_set": confirmation.response_event.is_set(),
+                    "cancel_event_set": handle.cancel_event.is_set(),
+                    "shutdown_state": app._shutdown_state,
+                    "dialog_active": app._dialog_active,
+                }
+            )
+            show_nested_dialog("shutdown confirmation")
+            return True
+
+        app._schedule_gui_request_polling()
+        try:
+            with patch.object(
+                main.messagebox,
+                "askyesno",
+                side_effect=ask_worker_confirmation,
+            ) as ask_worker:
+                with patch.object(
+                    main.messagebox,
+                    "askyesnocancel",
+                    side_effect=ask_shutdown_confirmation,
+                ) as ask_shutdown:
+                    self.run_event_loop_until(
+                        lambda: handle.done_event.is_set()
+                        and app.worker_handle is None
+                        and app._shutdown_state == "closed"
+                    )
+        finally:
+            if handle.thread is not None and handle.thread.is_alive():
+                handle.cancel_for_shutdown()
+                handle.thread.join(timeout=2)
+
+        ask_worker.assert_called_once()
+        ask_shutdown.assert_called_once()
+        self.assertEqual(
+            close_request_observations,
+            [(True, True, "confirming")],
+        )
+        self.assertEqual(
+            shutdown_prompt_observations,
+            [
+                {
+                    "worker_resumed": True,
+                    "answered": True,
+                    "response": True,
+                    "response_reason": "user_response",
+                    "response_event_set": True,
+                    "cancel_event_set": False,
+                    "shutdown_state": "shutdown_pending",
+                    "dialog_active": True,
+                }
+            ],
+        )
+        self.assertEqual(
+            self.dialog_order,
+            ["worker confirmation", "shutdown confirmation"],
+        )
+        self.assertEqual(modal_depth["maximum"], 1)
+        self.assertEqual(modal_depth["current"], 0)
+
+        self.assertTrue(confirmation.display_started)
+        self.assertTrue(confirmation.answered)
+        self.assertIs(confirmation.response, True)
+        self.assertEqual(confirmation.response_reason, "user_response")
+        self.assertTrue(confirmation.response_event.is_set())
+
+        self.assertTrue(handle.cancel_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+        self.assertTrue(handle.done_event.is_set())
+        self.assertIsNone(handle.exception)
+        self.assertIs(handle.result, True)
+        self.assertIsNotNone(handle.thread)
+        self.assertFalse(handle.thread.is_alive())
+        self.assertEqual(handle.pending_confirmations, {})
+
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app._shutdown_state, "closed")
+        self.assertFalse(app._dialog_active)
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertTrue(app.gui_request_queue.empty())
+        self.assertTrue(self.root.winfo_exists())
+        self.assertIsNone(app._gui_poll_after_id)
+
+
 if __name__ == "__main__":
     unittest.main()
