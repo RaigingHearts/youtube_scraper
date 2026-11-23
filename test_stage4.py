@@ -161,10 +161,6 @@ class ShutdownStateTests(Stage4AppTestCase):
         self.assertTrue(handle.cancel_event.is_set())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ObservedEvent:
     """Event待機開始を通知し、待機中のLock解放を検証する。"""
 
@@ -232,11 +228,14 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
 
     def test_s4_10_skip_additional_save_releases_waiter_without_starting_save(self):
         handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        handle.shutdown_decision_event = ObservedEvent()
         self.assertEqual(handle.begin_shutdown_decision(), "pending")
         result = []
         worker = threading.Thread(target=lambda: result.append(handle.begin_save()))
 
         worker.start()
+        self.assertTrue(handle.shutdown_decision_event.wait_started.wait(2))
+        self.assertEqual(result, [])
         self.assertTrue(handle.resolve_shutdown_decision("skip_additional_save"))
         worker.join(2)
 
@@ -247,11 +246,14 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
 
     def test_s4_11_cancelled_shutdown_releases_waiter_for_normal_save(self):
         handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        handle.shutdown_decision_event = ObservedEvent()
         self.assertEqual(handle.begin_shutdown_decision(), "pending")
         result = []
         worker = threading.Thread(target=lambda: result.append(handle.begin_save()))
 
         worker.start()
+        self.assertTrue(handle.shutdown_decision_event.wait_started.wait(2))
+        self.assertEqual(result, [])
         self.assertTrue(handle.resolve_shutdown_decision(None))
         worker.join(2)
 
@@ -358,3 +360,7 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
             self.assertEqual(handle.save_policy, "save_partial")
         else:
             self.assertIsNone(handle.save_policy)
+
+
+if __name__ == "__main__":
+    unittest.main()
