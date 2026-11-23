@@ -2257,6 +2257,7 @@ class TkStageIntegrationTests(unittest.TestCase):
             }],
         )
         self.assertTrue(release_save.is_set())
+        self.assertTrue(exception_injected.is_set())
         self.assertEqual(save_json.call_count, 1)
         self.assertEqual(save_calls[0][1], "video_info_raw_abcdefghijk.json")
         self.assertIs(save_calls[0][0], video_response)
@@ -2288,7 +2289,7 @@ class TkStageIntegrationTests(unittest.TestCase):
         summary_text = shutdown_summary.call_args.args[1]
         self.assertIn("取得失敗", summary_text)
         self.assertIn(
-            "simulated failure after first saved-file record",
+            "simulated failure after partial save",
             summary_text,
         )
         self.assertIsNone(app.worker_handle)
