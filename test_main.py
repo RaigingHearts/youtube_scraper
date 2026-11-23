@@ -43,6 +43,31 @@ class YouTubeCommentScraperAppTestCase(unittest.TestCase):
         return app
 
 
+class ApplicationLifecycleTests(YouTubeCommentScraperAppTestCase):
+    def test_finalize_shutdown_quits_mainloop_without_destroying_root(self):
+        app = self.make_app()
+
+        app._finalize_shutdown()
+
+        self.assertEqual(app._shutdown_state, "closed")
+        app.master.quit.assert_called_once_with()
+        app.master.destroy.assert_not_called()
+
+    def test_main_destroys_root_after_mainloop_raises(self):
+        root = MagicMock()
+        root.mainloop.side_effect = RuntimeError("mainloop failed")
+
+        with patch.object(main.logger_config, "configure_logging"):
+            with patch.object(main.settings_manager, "initialize_settings"):
+                with patch.object(main.tk, "Tk", return_value=root):
+                    with patch.object(main, "YouTubeCommentScraperApp"):
+                        with self.assertRaisesRegex(RuntimeError, "mainloop failed"):
+                            main.main()
+
+        root.mainloop.assert_called_once_with()
+        root.destroy.assert_called_once_with()
+
+
 class GuiPollingTests(YouTubeCommentScraperAppTestCase):
     def test_initial_poll_is_scheduled_after_50ms(self):
         app = self.make_app()
