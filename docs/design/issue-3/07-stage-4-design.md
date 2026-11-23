@@ -130,6 +130,7 @@ Issue #20のStage 4専用制御テストと実Tkイベントループ統合テ�
 - 対象ブランチ：`feature/issue-20-stage-1-tests`
 - 対象コミット：`0fe2eac`（Stage 4テストの終了ライフサイクル期待値を現行実装に整合）
 - `python -m unittest test_stage4 -v`：41 tests、0.236秒、`OK`。
+- 現行の `test_main.py`：27テスト（以前の25件から、mainloop終了とroot破棄順序を確認する2件を追加）。
 - `python -m unittest discover -v`：181 tests、2.973秒、`OK`。
 - `test_integration.py`：実Tkイベントループ統合テスト3件、全件成功（利用者報告）。
 - 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
