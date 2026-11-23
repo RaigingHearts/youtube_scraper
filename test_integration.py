@@ -266,18 +266,16 @@ class TkStageIntegrationTests(unittest.TestCase):
             else:
                 self.run_nested_dialog(title)
 
-        # ポーリングの再入階層、予約・キャンセル、root破棄時点を記録する。
-        # Tcl/Tkのafterコールバック警告が、実行中コールバックの破棄と
-        # 関係するかを切り分ける診断用。
+        # ポーリング実行中に終了要求が出た際、root破棄ではなく
+        # mainloop終了だけが要求されることを確認する。
         shutdown_diagnostics = {
-            "cancelled_ids": [],
             "events": [],
             "poll_depth": 0,
+            "quit_poll_depth": None,
         }
         original_poll = app._poll_gui_requests
         original_schedule = app._schedule_gui_request_polling
-        original_after_cancel = app.master.after_cancel
-        original_destroy = app.master.destroy
+        original_quit = app.master.quit
 
         def record_poll():
             shutdown_diagnostics["poll_depth"] += 1
@@ -311,45 +309,18 @@ class TkStageIntegrationTests(unittest.TestCase):
                 )
             )
 
-        def record_after_cancel(after_id):
-            shutdown_diagnostics["cancelled_ids"].append(after_id)
-            shutdown_diagnostics["events"].append(
-                ("after_cancel", shutdown_diagnostics["poll_depth"], after_id)
-            )
-            return original_after_cancel(after_id)
-
-        def inspect_destroy():
-            shutdown_diagnostics["events"].append(
-                (
-                    "destroy",
-                    shutdown_diagnostics["poll_depth"],
-                    app._gui_poll_after_id,
-                    app._shutdown_state,
-                )
-            )
-            shutdown_diagnostics["destroy_poll_depth"] = (
+        def record_quit():
+            shutdown_diagnostics["quit_poll_depth"] = (
                 shutdown_diagnostics["poll_depth"]
             )
-            try:
-                after_ids = app.master.tk.call("after", "info")
-                if isinstance(after_ids, str):
-                    after_ids = (after_ids,) if after_ids else ()
-                shutdown_diagnostics["pending_after"] = [
-                    (
-                        after_id,
-                        app.master.tk.call("after", "info", after_id),
-                    )
-                    for after_id in after_ids
-                ]
-            except tk.TclError as exc:
-                shutdown_diagnostics["inspection_error"] = str(exc)
-            shutdown_diagnostics["app_after_id"] = app._gui_poll_after_id
-            return original_destroy()
+            shutdown_diagnostics["events"].append(
+                ("quit", shutdown_diagnostics["poll_depth"], app._shutdown_state)
+            )
+            return original_quit()
 
         app._poll_gui_requests = record_poll
         app._schedule_gui_request_polling = record_schedule
-        app.master.after_cancel = record_after_cancel
-        app.master.destroy = inspect_destroy
+        app.master.quit = record_quit
         app._schedule_gui_request_polling()
         with patch.object(
             main.tk_notifications, "show_info", side_effect=show_info
@@ -379,16 +350,16 @@ class TkStageIntegrationTests(unittest.TestCase):
                 shutdown_diagnostics
             )
         )
-        pending_poll_callbacks = [
-            item for item in shutdown_diagnostics.get("pending_after", [])
-            if "_poll_gui_requests" in str(item[1])
-        ]
         self.assertEqual(
-            pending_poll_callbacks,
-            [],
-            "root破棄時にGUIポーリングのafter予約が残っています: {!r}".format(
+            shutdown_diagnostics["quit_poll_depth"],
+            1,
+            "ポーリングコールバック内からmainloop終了が要求されていません: {!r}".format(
                 shutdown_diagnostics
             ),
+        )
+        self.assertTrue(
+            self.root.winfo_exists(),
+            "mainloop終了前にrootが破棄されています。",
         )
         self.assertEqual(len(app._shutdown_notifications), 1)
         self.assertEqual(
