@@ -416,8 +416,6 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
             self.assertIsNone(handle.save_policy)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ShutdownWorkerRaceTests(Stage4AppTestCase):
@@ -529,8 +527,6 @@ class ShutdownWorkerRaceTests(Stage4AppTestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class CancelDuringWait:
