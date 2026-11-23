@@ -2012,19 +2012,15 @@ class TkStageIntegrationTests(unittest.TestCase):
             return True
 
         def ask_shutdown(title, message, **_kwargs):
-            def observe_and_release_save():
-                dialog_observations.append({
-                    "save_started": save_started.is_set(),
-                    "save_calls": len(save_calls),
-                    "worker_done": handle.done_event.is_set(),
-                    "shutdown_state": app._shutdown_state,
-                })
-                release_save.set()
-
-            self.run_nested_dialog(
-                "shutdown confirmation",
-                observe_and_release_save,
-            )
+            dialog_observations.append({
+                "save_started": save_started.is_set(),
+                "save_calls": len(save_calls),
+                "worker_done": handle.done_event.is_set(),
+                "shutdown_state": app._shutdown_state,
+            })
+            # _begin_shutdown() must resolve the decision and set cancel_event
+            # before the already-running save is allowed to finish.
+            self.root.after_idle(release_save.set)
             self.assertEqual(title, "終了確認")
             self.assertIn("保存処理はすでに開始されています", message)
             return True
