@@ -688,9 +688,9 @@ class ApiKeyStartupTests(YouTubeCommentScraperAppTestCase):
                     app = main.YouTubeCommentScraperApp(root)
         self.assertEqual(app.api_key, "configured-key")
         get_api_key.assert_called_once_with(root, None)
-        create_widgets.assert_called_once_with(app)
+        create_widgets.assert_called_once_with()
         root.protocol.assert_called_once_with("WM_DELETE_WINDOW", app._on_close_request)
-        schedule_polling.assert_called_once_with(app)
+        schedule_polling.assert_called_once_with()
         root.destroy.assert_not_called()
 
     def test_api_key_cancellation_skips_gui_setup_and_destroys_root(self):
