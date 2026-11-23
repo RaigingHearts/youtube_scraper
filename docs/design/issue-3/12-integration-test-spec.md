@@ -111,6 +111,7 @@ Issue #20の `test_integration.py` に実Tkイベントループを使用する�
 - `python -m unittest test_stage4 -v`：41 tests、0.236秒、`OK`。
 - `test_integration.py`：3 tests、全件成功。
 - `python -m unittest discover -v`：181 tests、2.973秒、`OK`。
+- 現行の `test_main.py`：27テスト（以前の25件から、mainloop終了とroot破棄順序を確認する2件を追加）。
 - 環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
 - 対象ブランチ：`feature/issue-20-stage-1-tests`、対象コミット：`0fe2eac`。
 
