@@ -1291,7 +1291,7 @@ class TkStageIntegrationTests(unittest.TestCase):
                 with patch.object(
                     main.youtube_api_client,
                     "fetch_all_comments",
-                    side_effect=fetch_after_setup,
+                    return_value=(fetch_result, 0, 0),
                 ) as fetch_comments:
                     with patch.object(
                         main.tk_notifications, "show_info"
