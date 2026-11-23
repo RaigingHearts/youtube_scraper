@@ -674,5 +674,40 @@ class TkEventLoopIntegrationTests(unittest.TestCase):
         )
 
 
+class ApiKeyStartupTests(YouTubeCommentScraperAppTestCase):
+    def test_api_key_success_builds_gui_and_starts_polling(self):
+        root = MagicMock()
+        with patch.object(
+            main.tk_app_settings, "check_and_prompt_api_key",
+            return_value="configured-key",
+        ) as get_api_key:
+            with patch.object(main.YouTubeCommentScraperApp, "_create_widgets") as create_widgets:
+                with patch.object(
+                    main.YouTubeCommentScraperApp, "_schedule_gui_request_polling"
+                ) as schedule_polling:
+                    app = main.YouTubeCommentScraperApp(root)
+        self.assertEqual(app.api_key, "configured-key")
+        get_api_key.assert_called_once_with(root, None)
+        create_widgets.assert_called_once_with(app)
+        root.protocol.assert_called_once_with("WM_DELETE_WINDOW", app._on_close_request)
+        schedule_polling.assert_called_once_with(app)
+        root.destroy.assert_not_called()
+
+    def test_api_key_cancellation_skips_gui_setup_and_destroys_root(self):
+        root = MagicMock()
+        with patch.object(
+            main.tk_app_settings, "check_and_prompt_api_key", return_value=None
+        ):
+            with patch.object(main.YouTubeCommentScraperApp, "_create_widgets") as create_widgets:
+                with patch.object(
+                    main.YouTubeCommentScraperApp, "_schedule_gui_request_polling"
+                ) as schedule_polling:
+                    app = main.YouTubeCommentScraperApp(root)
+        self.assertIsNone(app.api_key)
+        create_widgets.assert_not_called()
+        root.protocol.assert_not_called()
+        schedule_polling.assert_not_called()
+        root.destroy.assert_called_once_with()
+
 if __name__ == "__main__":
     unittest.main()
