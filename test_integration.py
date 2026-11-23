@@ -276,6 +276,64 @@ class TkStageIntegrationTests(unittest.TestCase):
         original_poll = app._poll_gui_requests
         original_schedule = app._schedule_gui_request_polling
         original_quit = app.master.quit
+        original_register = self.root._register
+        original_deletecommand = self.root.deletecommand
+        original_after = self.root.after
+        original_after_cancel = self.root.after_cancel
+        tcl_lifecycle_events = []
+        after_command_map = {}
+
+        def callback_label(func):
+            return getattr(func, "__name__", type(func).__name__)
+
+        def record_register(func, *args, **kwargs):
+            command_name = original_register(func, *args, **kwargs)
+            tcl_lifecycle_events.append(
+                ("register", command_name, callback_label(func))
+            )
+            return command_name
+
+        def record_deletecommand(command_name):
+            tcl_lifecycle_events.append(
+                ("deletecommand", command_name, command_name in after_command_map.values())
+            )
+            return original_deletecommand(command_name)
+
+        def record_after(ms, func=None, *args):
+            after_id = original_after(ms, func, *args)
+            try:
+                after_info = self.root.tk.call("after", "info", after_id)
+            except tk.TclError as exc:
+                after_info = "inspection failed: {}".format(exc)
+            command_name = None
+            if isinstance(after_info, tuple) and after_info:
+                command_name = after_info[0]
+            after_command_map[after_id] = command_name
+            tcl_lifecycle_events.append(
+                ("after", after_id, ms, callback_label(func) if func else None,
+                 command_name, after_info)
+            )
+            return after_id
+
+        def record_after_cancel(after_id):
+            command_name = after_command_map.get(after_id)
+            try:
+                before = self.root.tk.call("after", "info", after_id)
+            except tk.TclError as exc:
+                before = "inspection failed: {}".format(exc)
+            tcl_lifecycle_events.append(
+                ("after_cancel_before", after_id, command_name, before)
+            )
+            result = original_after_cancel(after_id)
+            tcl_lifecycle_events.append(
+                ("after_cancel_after", after_id, command_name)
+            )
+            return result
+
+        self.root._register = record_register
+        self.root.deletecommand = record_deletecommand
+        self.root.after = record_after
+        self.root.after_cancel = record_after_cancel
 
         def record_poll():
             shutdown_diagnostics["poll_depth"] += 1
@@ -315,6 +373,17 @@ class TkStageIntegrationTests(unittest.TestCase):
             )
             shutdown_diagnostics["events"].append(
                 ("quit", shutdown_diagnostics["poll_depth"], app._shutdown_state)
+            )
+            try:
+                pending = []
+                for after_id in self.root.tk.call("after", "info"):
+                    pending.append(
+                        (after_id, self.root.tk.call("after", "info", after_id))
+                    )
+            except tk.TclError as exc:
+                pending = "inspection failed: {}".format(exc)
+            tcl_lifecycle_events.append(
+                ("quit_snapshot", pending, list(self.root._tclCommands or []))
             )
             return original_quit()
 
@@ -378,6 +447,11 @@ class TkStageIntegrationTests(unittest.TestCase):
         print(
             "Tk post-mainloop Tcl diagnostics: {!r}".format(
                 tcl_diagnostics
+            )
+        )
+        print(
+            "Tk Tcl command lifecycle events: {!r}".format(
+                tcl_lifecycle_events
             )
         )
         self.assertEqual(
