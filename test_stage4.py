@@ -878,5 +878,181 @@ class ShutdownPartialResultTests(Stage4AppTestCase):
         )
 
 
+class ShutdownNotificationAndConfirmationTests(Stage4AppTestCase):
+    """S4-31～S4-38：終了中の通知集約と確認要求解除。"""
+
+    def make_notification(self, kind, title, message):
+        return tk_async_tasks.GuiRequest(
+            kind="notification",
+            payload={"kind": kind, "title": title, "message": message},
+        )
+
+    def make_confirmation(self, handle, display_started=False):
+        request = tk_async_tasks.GuiRequest(
+            kind="confirmation",
+            payload={"message": "Continue?"},
+        )
+        request.display_started = display_started
+        with handle.confirmation_lock:
+            handle.pending_confirmations[request.request_id] = request
+        return request
+
+    def test_s4_31_notification_during_shutdown_pending_is_deferred(self):
+        app = self.make_app()
+        app._shutdown_state = "shutdown_pending"
+        request = self.make_notification("warning", "Delayed", "Wait")
+
+        with patch.object(main.tk_notifications, "show_warning") as show_warning:
+            app._handle_gui_request(request)
+
+        show_warning.assert_not_called()
+        self.assertEqual(app._pending_modal_requests, [request])
+        self.assertEqual(app._shutdown_notifications, [])
+
+    def test_s4_32_shutdown_collection_moves_notifications_in_fifo_order(self):
+        app = self.make_app()
+        handle = self.make_running_handle(app)
+        first = self.make_notification("info", "First", "one")
+        confirmation = self.make_confirmation(handle)
+        second = self.make_notification("error", "Second", "two")
+        app._pending_modal_requests.extend([first, confirmation, second])
+
+        handle.cancel_for_shutdown()
+        app._collect_pending_shutdown_requests()
+
+        self.assertEqual(
+            app._shutdown_notifications,
+            [first.payload, second.payload],
+        )
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertTrue(confirmation.answered)
+        self.assertFalse(confirmation.response)
+        self.assertEqual(
+            confirmation.response_reason, "application_shutdown"
+        )
+        self.assertTrue(confirmation.response_event.is_set())
+
+    def test_s4_33_notifications_arriving_while_stopping_are_aggregated(self):
+        app = self.make_app()
+        app._shutdown_state = "stopping"
+        notices = [
+            self.make_notification("info", "Info", "one"),
+            self.make_notification("warning", "Warning", "two"),
+            self.make_notification("error", "Error", "three"),
+        ]
+
+        with patch.object(main.tk_notifications, "show_info") as show_info:
+            with patch.object(main.tk_notifications, "show_warning") as show_warning:
+                with patch.object(main.tk_notifications, "show_error") as show_error:
+                    for request in notices:
+                        app._handle_gui_request(request)
+
+        show_info.assert_not_called()
+        show_warning.assert_not_called()
+        show_error.assert_not_called()
+        self.assertEqual(
+            app._shutdown_notifications,
+            [request.payload for request in notices],
+        )
+
+    def test_s4_34_shutdown_summary_is_shown_once_before_root_destroy(self):
+        app = self.make_app()
+        app._shutdown_state = "stopping"
+        app._shutdown_notifications = [
+            {"kind": "warning", "title": "Warning title", "message": "Warning body"},
+            {"kind": "error", "title": "Error title", "message": "Error body"},
+        ]
+        order = []
+
+        def show_summary(title, message, parent):
+            order.append("summary")
+            self.assertEqual(title, "終了時の通知")
+            self.assertIn("[WARNING] Warning title", message)
+            self.assertIn("Warning body", message)
+            self.assertIn("[ERROR] Error title", message)
+            self.assertIn("Error body", message)
+
+        def destroy_root():
+            order.append("destroy")
+
+        app.master.destroy.side_effect = destroy_root
+        with patch.object(main.messagebox, "showinfo", side_effect=show_summary) as show:
+            app._finalize_shutdown()
+            app._finalize_shutdown()
+
+        show.assert_called_once()
+        self.assertEqual(order, ["summary", "destroy"])
+        self.assertTrue(app._shutdown_summary_shown)
+        self.assertEqual(app._shutdown_state, "closed")
+        app.master.destroy.assert_called_once_with()
+
+    def test_s4_35_shutdown_without_notifications_skips_summary(self):
+        app = self.make_app()
+        app._shutdown_state = "stopping"
+
+        with patch.object(main.messagebox, "showinfo") as show:
+            app._finalize_shutdown()
+
+        show.assert_not_called()
+        self.assertFalse(app._shutdown_summary_shown)
+        self.assertEqual(app._shutdown_state, "closed")
+        app.master.destroy.assert_called_once_with()
+
+    def test_s4_36_unanswered_confirmation_is_released_by_shutdown(self):
+        app = self.make_app()
+        handle = self.make_running_handle(app)
+        request = self.make_confirmation(handle)
+        app._pending_modal_requests.append(request)
+
+        handle.cancel_for_shutdown()
+        app._collect_pending_shutdown_requests()
+
+        self.assertTrue(request.answered)
+        self.assertFalse(request.response)
+        self.assertEqual(request.response_reason, "application_shutdown")
+        self.assertTrue(request.response_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+        self.assertEqual(app._shutdown_notifications, [])
+
+    def test_s4_37_display_started_confirmation_keeps_dialog_answer(self):
+        app = self.make_app()
+        handle = self.make_running_handle(app)
+        request = self.make_confirmation(handle, display_started=True)
+
+        handle.cancel_for_shutdown()
+
+        self.assertFalse(request.answered)
+        self.assertFalse(request.response_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+
+        app._answer_confirmation(request, True, "user_response")
+
+        self.assertTrue(request.answered)
+        self.assertTrue(request.response)
+        self.assertEqual(request.response_reason, "user_response")
+        self.assertTrue(request.response_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+
+    def test_s4_38_new_shutdown_confirmation_is_rejected_and_late_answer_ignored(self):
+        app = self.make_app()
+        handle = self.make_running_handle(app)
+        app._shutdown_state = "stopping"
+        request = tk_async_tasks.GuiRequest(
+            kind="confirmation",
+            payload={"message": "Must not be displayed"},
+        )
+
+        with patch.object(main.messagebox, "askyesno") as ask:
+            app._handle_gui_request(request)
+            app._answer_confirmation(request, True, "user_response")
+
+        ask.assert_not_called()
+        self.assertTrue(request.answered)
+        self.assertFalse(request.response)
+        self.assertEqual(request.response_reason, "application_shutdown")
+        self.assertTrue(request.response_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+
+
 if __name__ == "__main__":
     unittest.main()
