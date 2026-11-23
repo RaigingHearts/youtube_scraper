@@ -22,15 +22,102 @@ class TkStageIntegrationTests(unittest.TestCase):
                 "Tk GUI環境を利用できないため統合テストをスキップ: {}".format(exc)
             )
         self.dialog_order = []
+        # 各テストの開始からroot破棄まで、Tkコールバックの登録・削除を追跡する。
+        self.tk_callback_trace = []
+        self.tk_after_commands = {}
+        self.tk_trace_patchers = []
+        original_register = tk.Misc._register
+        original_deletecommand = tk.Misc.deletecommand
+        original_after = tk.Misc.after
+        original_after_cancel = tk.Misc.after_cancel
+
+        def callback_name(func):
+            return getattr(func, "__name__", type(func).__name__)
+
+        def trace_register(widget, func, *args, **kwargs):
+            command_name = original_register(widget, func, *args, **kwargs)
+            self.tk_callback_trace.append(
+                ("register", str(widget), command_name, callback_name(func))
+            )
+            return command_name
+
+        def trace_deletecommand(widget, command_name):
+            self.tk_callback_trace.append(
+                ("deletecommand", str(widget), command_name,
+                 command_name in self.tk_after_commands.values())
+            )
+            return original_deletecommand(widget, command_name)
+
+        def trace_after(widget, ms, func=None, *args):
+            after_id = original_after(widget, ms, func, *args)
+            try:
+                info = widget.tk.call("after", "info", after_id)
+            except tk.TclError as exc:
+                info = "inspection failed: {}".format(exc)
+            command_name = info[0] if isinstance(info, tuple) and info else None
+            self.tk_after_commands[after_id] = command_name
+            self.tk_callback_trace.append(
+                ("after", str(widget), after_id, ms,
+                 callback_name(func) if func else None, command_name, info)
+            )
+            return after_id
+
+        def trace_after_cancel(widget, after_id):
+            try:
+                info = widget.tk.call("after", "info", after_id)
+            except tk.TclError as exc:
+                info = "inspection failed: {}".format(exc)
+            self.tk_callback_trace.append(
+                ("after_cancel", str(widget), after_id,
+                 self.tk_after_commands.get(after_id), info)
+            )
+            return original_after_cancel(widget, after_id)
+
+        for method_name, replacement in (
+            ("_register", trace_register),
+            ("deletecommand", trace_deletecommand),
+            ("after", trace_after),
+            ("after_cancel", trace_after_cancel),
+        ):
+            patcher = patch.object(tk.Misc, method_name, replacement)
+            patcher.start()
+            self.tk_trace_patchers.append(patcher)
 
     def tearDown(self):
         root = getattr(self, "root", None)
-        if root is not None:
-            try:
-                if root.winfo_exists():
-                    root.destroy()
-            except tk.TclError:
-                pass
+        try:
+            if root is not None:
+                try:
+                    if root.winfo_exists():
+                        root.destroy()
+                except tk.TclError:
+                    pass
+                try:
+                    pending = [
+                        (after_id, root.tk.call("after", "info", after_id))
+                        for after_id in root.tk.call("after", "info")
+                    ]
+                    commands = list(root._tclCommands or [])
+                except tk.TclError as exc:
+                    pending = "inspection failed: {}".format(exc)
+                    commands = []
+                relevant_events = [
+                    event for event in self.tk_callback_trace
+                    if "_poll_gui_requests" in repr(event)
+                ]
+                if relevant_events or pending:
+                    print(
+                        "Tk test-wide callback trace: {!r}".format(
+                            {
+                                "poll_callback_events": relevant_events,
+                                "pending_after": pending,
+                                "registered_commands": commands,
+                            }
+                        )
+                    )
+        finally:
+            for patcher in reversed(getattr(self, "tk_trace_patchers", [])):
+                patcher.stop()
 
     def make_app(self):
         app = main.YouTubeCommentScraperApp.__new__(
