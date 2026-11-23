@@ -133,7 +133,7 @@ class TkStageIntegrationTests(unittest.TestCase):
         )
         self.assertTrue(predicate(), "終了条件が成立していません。")
 
-    def queue_during_active_modal(self, app, handle):
+    def queue_during_active_modal(self, app):
         """確認要求と通知をモーダル表示中に処理し、終了要求を発行する。"""
         # 確認要求に続けて通知を登録し、ネストしたイベントループ内で
         # ポーリングを一度だけ再入させて、両方を保留列へ退避させる。
@@ -201,7 +201,7 @@ class TkStageIntegrationTests(unittest.TestCase):
             if title == "initial notification":
                 self.run_nested_dialog(
                     "initial notification",
-                    lambda: self.queue_during_active_modal(app, handle),
+                    lambda: self.queue_during_active_modal(app),
                 )
             else:
                 self.run_nested_dialog(title)
