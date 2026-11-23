@@ -1285,14 +1285,6 @@ class TkStageIntegrationTests(unittest.TestCase):
             virtual_main_file = os.path.join(
                 temporary_directory, "application", "main.py"
             )
-            expected_output_directory = os.path.join(
-                temporary_directory,
-                "application",
-                "youtube_data_{}_{}".format(
-                    video_id, main.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-                ),
-            )
-
             with patch.object(
                 main, "__file__", virtual_main_file
             ):
@@ -1324,6 +1316,10 @@ class TkStageIntegrationTests(unittest.TestCase):
 
             saved_record = handle.result["saved_files"][0]
             expected_filename = "video_info_raw_{}.json".format(video_id)
+            expected_output_directory = os.path.join(
+                os.path.dirname(os.path.abspath(virtual_main_file)),
+                handle.result["output_folder_name"],
+            )
             expected_path = os.path.join(
                 expected_output_directory, expected_filename
             )
