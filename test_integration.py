@@ -1690,7 +1690,12 @@ class TkStageIntegrationTests(unittest.TestCase):
             self.assertTrue(self.root.winfo_exists())
 
             self.root.destroy()
-            self.assertFalse(self.root.winfo_exists())
+            # destroy()でTkインタープリター自体が破棄されるため、
+            # 以後のTk呼び出しはTclErrorになることを破棄確認とする。
+            with self.assertRaises(tk.TclError):
+                self.root.winfo_exists()
+            # tearDown()による二重確認・二重破棄を避ける。
+            self.root = None
 
 
 if __name__ == "__main__":
