@@ -210,3 +210,18 @@ Stage 3専用テストは24件。確認要求のEventライフサイクル・競
 - Stage 4専用制御テストおよび既存回帰テストは合格。Stage 1～4横断の実Tkイベントループ統合テストと実デスクトップ受入確認は未実施であり、別工程として残す。
 - API通信タイムアウトは本Stageの対象外。API `execute()` が戻らない場合は終了待機が継続する。
 
+
+
+### 6.10 Stage 4テストエントリーポイント整理後の再検証（2026-11-23）
+
+- 実行主体：利用者報告。
+- ブランチ：`feature/issue-20-stage-1-tests`。
+- 対象コミット：`ee53142f36d5611b7ae505a269e438baf775348f`（`test_stage4.py` の `unittest.main()` エントリーポイントをファイル末尾の1か所へ統一）。
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
+- `python test_stage4.py -v`：41 tests、0.348秒、`OK`。
+- `python -m unittest test_stage4 -v`：41 tests、0.287秒、`OK`。
+- `python -m unittest test_main -v`：25 tests、0.842秒、`OK`。
+- `python -m unittest discover -v`：176 tests、2.451秒、`OK`。
+- 直接スクリプト実行、モジュール指定実行、全体自動検出のすべてで成功した。テストケース・アサーション・アプリケーションコードの変更はない。
+- 異常系テストによるRuntimeError等のログは想定出力であり、対応テストは成功した。
+- この再検証はStage 4専用制御テストおよび既存回帰テストの成功を示す。Stage 1～4横断の実Tkイベントループ統合テスト、Stage 4終了シナリオ全体の実Tk統合、実デスクトップ受入確認は未完了である。
