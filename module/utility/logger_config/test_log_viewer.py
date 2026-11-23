@@ -17,13 +17,17 @@ class LogViewerTests(unittest.TestCase):
             with patch.object(
                 log_viewer, "ScrolledText", return_value=self.text_area
             ):
-                with patch.object(log_viewer.tk, "Button", return_value=self.button):
-                    with patch.object(log_viewer.os.path, "exists", return_value=False):
+                with patch.object(
+                    log_viewer.tk, "Button", return_value=self.button
+                ) as button_factory:
+                    with patch.object(
+                        log_viewer.os.path, "exists", return_value=False
+                    ):
                         window = log_viewer.show_log_window(parent=MagicMock())
         self.assertIs(window, self.window)
         # show_log_window performs an initial load; isolate each test's explicit refresh.
         self.text_area.reset_mock()
-        return self.button.call_args.kwargs["command"]
+        return button_factory.call_args.kwargs["command"]
 
     def test_existing_log_file_is_read_as_utf8_and_displayed(self):
         refresh = self.show_window()
