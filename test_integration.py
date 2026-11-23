@@ -2148,9 +2148,8 @@ class TkStageIntegrationTests(unittest.TestCase):
     def test_real_event_loop_recovers_partial_save_after_unexpected_worker_exception_during_shutdown(self):
         app = self.make_app()
         app.api_key = "integration-test-api-key"
-        fetch_started = threading.Event()
-        release_fetch = threading.Event()
         save_started = threading.Event()
+        exception_injected = threading.Event()
         release_save = threading.Event()
         dialog_observations = []
         save_calls = []
@@ -2164,20 +2163,6 @@ class TkStageIntegrationTests(unittest.TestCase):
             "comment_replies_raw_responses": [],
             "notifications": [],
         }
-
-        def fetch_after_setup(*_args, **_kwargs):
-            fetch_started.set()
-            if not release_fetch.wait(5):
-                raise RuntimeError("fetch setup event timed out")
-            return fetch_result, 0, 0
-
-        class AppendThenRaise(list):
-            def append(self, record):
-                super().append(record)
-                if len(self) == 1:
-                    raise RuntimeError(
-                        "simulated failure after first saved-file record"
-                    )
 
         def save_file(data, filename, output_dir=None):
             save_calls.append((data, filename, output_dir))
@@ -2212,7 +2197,7 @@ class TkStageIntegrationTests(unittest.TestCase):
                 with patch.object(
                     main.youtube_api_client,
                     "fetch_all_comments",
-                    side_effect=fetch_after_setup,
+                    return_value=(fetch_result, 0, 0),
                 ) as fetch_comments:
                     with patch.object(
                         main.json_data_handler,
@@ -2227,6 +2212,21 @@ class TkStageIntegrationTests(unittest.TestCase):
                             with patch.object(
                                 main.messagebox, "showinfo"
                             ) as shutdown_summary:
+                                original_queue_put = app.gui_request_queue.put
+
+                                def fail_task_notification_once(request, *args, **kwargs):
+                                    if (
+                                        getattr(request, "kind", None) == "notification"
+                                        and save_started.is_set()
+                                        and not exception_injected.is_set()
+                                    ):
+                                        exception_injected.set()
+                                        raise RuntimeError(
+                                            "simulated failure after partial save"
+                                        )
+                                    return original_queue_put(request, *args, **kwargs)
+
+                                app.gui_request_queue.put = fail_task_notification_once
                                 handle = tk_async_tasks.run_task_in_thread(
                                     app._scrape_comments_task,
                                     app.gui_request_queue,
@@ -2234,12 +2234,6 @@ class TkStageIntegrationTests(unittest.TestCase):
                                 )
                                 app.worker_handle = handle
                                 app._schedule_gui_request_polling()
-                                self.assertTrue(
-                                    fetch_started.wait(2),
-                                    "ワーカーがモックAPI処理へ到達しませんでした。",
-                                )
-                                handle.partial_result["saved_files"] = AppendThenRaise()
-                                release_fetch.set()
                                 self.assertTrue(
                                     save_started.wait(2),
                                     "ワーカーが保存処理を開始しませんでした。",
@@ -2271,7 +2265,7 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertIsInstance(handle.exception, RuntimeError)
         self.assertEqual(
             str(handle.exception),
-            "simulated failure after first saved-file record",
+            "simulated failure after partial save",
         )
         self.assertTrue(handle.cancel_event.is_set())
         self.assertEqual(handle.cancel_reason, "application_shutdown")
