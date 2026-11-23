@@ -1,6 +1,9 @@
 """実Tkイベントループ上でStage 3・4の連携を検証する統合テスト。"""
 
+import json
+import os
 import queue
+import tempfile
 import threading
 import tkinter as tk
 import unittest
@@ -1254,6 +1257,126 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertFalse(app._dialog_active)
         self.assertIsNone(app._gui_poll_after_id)
         self.assertTrue(self.root.winfo_exists())
+
+
+    def test_real_event_loop_restores_saved_json_open_workflow(self):
+        app = self.make_app()
+        app.api_key = "integration-test-api-key"
+        video_id = "abcdefghijk"
+        video_response = {
+            "items": [{
+                "id": video_id,
+                "snippet": {
+                    "title": "saved integration video",
+                    "channelId": "channel-1",
+                },
+            }]
+        }
+        fetch_result = {
+            "fetch_status": "complete",
+            "video_info_raw_response": video_response,
+            "channel_info_raw_response": {},
+            "comment_threads_raw_responses": [],
+            "comment_replies_raw_responses": [],
+            "notifications": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            virtual_main_file = os.path.join(
+                temporary_directory, "application", "main.py"
+            )
+            expected_output_directory = os.path.join(
+                temporary_directory,
+                "application",
+                "youtube_data_{}_{}".format(
+                    video_id, main.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
+                ),
+            )
+
+            with patch.object(
+                main, "__file__", virtual_main_file
+            ):
+                with patch.object(
+                    main.youtube_api_client,
+                    "fetch_all_comments",
+                    return_value=(fetch_result, 0, 0),
+                ) as fetch_comments:
+                    with patch.object(
+                        main.tk_notifications, "show_info"
+                    ) as show_info:
+                        handle = tk_async_tasks.run_task_in_thread(
+                            app._scrape_comments_task,
+                            app.gui_request_queue,
+                            video_id,
+                        )
+                        app.worker_handle = handle
+                        app._schedule_gui_request_polling()
+                        self.run_event_loop_until(
+                            lambda: handle.done_event.is_set()
+                            and app.worker_handle is None
+                        )
+
+            fetch_comments.assert_called_once()
+            self.assertIsNone(handle.exception)
+            self.assertFalse(handle.thread.is_alive())
+            self.assertEqual(handle.result["fetch_result"], fetch_result)
+            self.assertEqual(len(handle.result["saved_files"]), 1)
+
+            saved_record = handle.result["saved_files"][0]
+            expected_filename = "video_info_raw_{}.json".format(video_id)
+            expected_path = os.path.join(
+                expected_output_directory, expected_filename
+            )
+            self.assertEqual(
+                saved_record,
+                {
+                    "kind": "video_info",
+                    "path": expected_path,
+                    "success": True,
+                },
+            )
+            self.assertTrue(os.path.isfile(expected_path))
+            with open(expected_path, "r", encoding="utf-8") as saved_file:
+                self.assertEqual(json.load(saved_file), video_response)
+
+            self.assertEqual(
+                app.last_saved_video_info_file_path, expected_path
+            )
+            self.assertIsNone(app.last_saved_comment_file_path)
+            self.assertIsNone(app.last_saved_channel_info_file_path)
+            self.assertIsNone(app.last_saved_replies_file_path)
+            app.open_json_button.config.assert_any_call(state=tk.NORMAL)
+            app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+            show_info.assert_called_once()
+
+            selected_paths = []
+
+            def select_saved_file(_parent, _title, options):
+                self.assertEqual(
+                    options,
+                    [("動画情報Rawデータファイル", expected_path)],
+                )
+                return expected_path
+
+            with patch.object(
+                main.tk_notifications,
+                "show_file_selection_dialog",
+                side_effect=select_saved_file,
+            ) as select_file:
+                with patch.object(
+                    main.file_operations,
+                    "open_file_in_default_app",
+                    side_effect=lambda path: selected_paths.append(path) or True,
+                ) as open_file:
+                    app._open_json_file()
+
+            select_file.assert_called_once_with(
+                self.root,
+                "ファイル選択",
+                [("動画情報Rawデータファイル", expected_path)],
+            )
+            open_file.assert_called_once_with(expected_path)
+            self.assertEqual(selected_paths, [expected_path])
 
 
 if __name__ == "__main__":
