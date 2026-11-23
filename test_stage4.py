@@ -162,6 +162,58 @@ class ShutdownStateTests(Stage4AppTestCase):
         self.assertTrue(handle.cancel_event.is_set())
 
 
+class ShutdownModalBoundaryTests(Stage4AppTestCase):
+    """S4-39：既存モーダル終了から終了確認開始までの順序。"""
+
+    def test_s4_39_close_during_modal_waits_for_dialog_then_confirms_before_fifo_resume(self):
+        app = self.make_app()
+        active = tk_async_tasks.GuiRequest(
+            kind="notification",
+            payload={"kind": "info", "title": "Active", "message": "active"},
+        )
+        pending = tk_async_tasks.GuiRequest(
+            kind="notification",
+            payload={"kind": "warning", "title": "Pending", "message": "pending"},
+        )
+        app._pending_modal_requests.append(pending)
+        order = []
+
+        def close_during_dialog(title, message, parent):
+            order.append("active-dialog")
+            app._on_close_request()
+
+        def ask_shutdown(*args, **kwargs):
+            order.append("shutdown-confirmation")
+            return None
+
+        def show_pending(title, message, parent):
+            order.append("pending-dialog")
+
+        with patch.object(main.tk_notifications, "show_info", side_effect=close_during_dialog):
+            with patch.object(main.messagebox, "askyesnocancel", side_effect=ask_shutdown) as ask:
+                with patch.object(main.tk_notifications, "show_warning", side_effect=show_pending) as warning:
+                    app._show_modal_request(active)
+
+                    self.assertTrue(app._shutdown_requested)
+                    self.assertEqual(app._pending_modal_requests, [pending])
+                    ask.assert_not_called()
+                    warning.assert_not_called()
+                    app.master.after_idle.assert_called_once()
+
+                    callback = app.master.after_idle.call_args[0][0]
+                    callback()
+
+        self.assertEqual(
+            order,
+            ["active-dialog", "shutdown-confirmation", "pending-dialog"],
+        )
+        ask.assert_called_once()
+        warning.assert_called_once()
+        self.assertEqual(app._shutdown_state, "running")
+        self.assertFalse(app._shutdown_requested)
+        self.assertEqual(app._pending_modal_requests, [])
+
+
 class ObservedEvent:
     """Event待機開始を通知し、待機中のLock解放を検証する。"""
 
@@ -361,6 +413,18 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
             self.assertEqual(handle.save_policy, "save_partial")
         else:
             self.assertIsNone(handle.save_policy)
+
+    def test_s4_41_notification_arriving_after_shutdown_complete_is_aggregated(self):
+        app = self.make_app()
+        app._shutdown_state = "complete"
+        request = self.make_notification("error", "Late error", "late message")
+
+        with patch.object(main.tk_notifications, "show_error") as show_error:
+            app._handle_gui_request(request)
+
+        show_error.assert_not_called()
+        self.assertEqual(app._shutdown_notifications, [request.payload])
+        self.assertEqual(app._pending_modal_requests, [])
 
 
 if __name__ == "__main__":
@@ -867,6 +931,42 @@ class ShutdownPartialResultTests(Stage4AppTestCase):
         self.assertEqual(
             result["fetch_result"]["cancel_reason"], "application_shutdown"
         )
+        notification_requests = [
+            request for request in list(self.app.gui_request_queue.queue)
+            if request.kind == "notification"
+        ]
+        self.assertEqual(len(notification_requests), 1)
+        self.assertIn(
+            "追加保存は行っていません",
+            notification_requests[0].payload["message"],
+        )
+
+    def test_s4_40_skip_additional_save_applies_when_fetch_completed_before_shutdown(self):
+        self.assertTrue(
+            self.handle.resolve_shutdown_decision(
+                "skip_additional_save", cancel=True
+            )
+        )
+        fetch_result = self.make_cancelled_result()
+        fetch_result["fetch_status"] = "complete"
+        fetch_result.pop("cancel_reason")
+
+        with patch.object(
+            main.youtube_api_client,
+            "fetch_all_comments",
+            return_value=(fetch_result, 2, 2),
+        ):
+            with patch.object(
+                main.json_data_handler, "save_json_to_file"
+            ) as save_file:
+                result = self.app._scrape_comments_task(
+                    self.handle, "abcdefghijk"
+                )
+
+        save_file.assert_not_called()
+        self.assertEqual(result["fetch_result"]["fetch_status"], "complete")
+        self.assertEqual(result["saved_files"], [])
+        self.assertEqual(self.handle.partial_result["saved_files"], [])
         notification_requests = [
             request for request in list(self.app.gui_request_queue.queue)
             if request.kind == "notification"
