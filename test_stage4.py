@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import main
 from module.utility.tk_async_tasks import tk_async_tasks
+from module.utility.youtube_api_client import youtube_api_client
 
 
 class Stage4AppTestCase(unittest.TestCase):
@@ -473,6 +474,408 @@ class ShutdownWorkerRaceTests(Stage4AppTestCase):
         self.assertTrue(handle.done_event.is_set())
         self.assertEqual(handle.result, "finished")
 
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class CancelDuringWait:
+    """ページ間待機でキャンセルを通知する決定的なテストEvent。"""
+
+    def __init__(self):
+        self.cancelled = False
+        self.wait_calls = []
+
+    def is_set(self):
+        return self.cancelled
+
+    def set(self):
+        self.cancelled = True
+
+    def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        self.cancelled = True
+        return True
+
+
+class ShutdownApiCancellationTests(unittest.TestCase):
+    """S4-21～S4-28：API通信・ページ境界での協調的キャンセル。"""
+
+    def make_service(self, thread_response=None, reply_responses=None):
+        service = MagicMock()
+        service.videos.return_value.list.return_value.execute.return_value = {
+            "items": [{
+                "snippet": {
+                    "channelId": "channel-1",
+                    "title": "Test",
+                    "channelTitle": "Uploader",
+                }
+            }]
+        }
+        service.channels.return_value.list.return_value.execute.return_value = {
+            "items": [{"id": "channel-1"}]
+        }
+        service.commentThreads.return_value.list.return_value.execute.return_value = (
+            thread_response if thread_response is not None else {"items": []}
+        )
+        service.comments.return_value.list.return_value.execute.side_effect = (
+            reply_responses if reply_responses is not None else []
+        )
+        return service
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_21_pre_cancelled_request_does_not_initialize_api_service(
+        self, get_service
+    ):
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        get_service.assert_not_called()
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(data["video_info_raw_response"], {})
+        self.assertEqual(data["comment_threads_raw_responses"], [])
+        self.assertEqual((fetched, expected), (0, 0))
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_22_cancel_during_video_execute_keeps_response_and_stops_followups(
+        self, get_service
+    ):
+        cancel_event = threading.Event()
+        service = self.make_service()
+        video_response = {"items": [{"snippet": {"channelId": "channel-1"}}]}
+
+        def execute_video():
+            cancel_event.set()
+            return video_response
+
+        service.videos.return_value.list.return_value.execute.side_effect = (
+            execute_video
+        )
+        get_service.return_value = service
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertIs(data["video_info_raw_response"], video_response)
+        service.channels.return_value.list.assert_not_called()
+        service.commentThreads.return_value.list.assert_not_called()
+        self.assertEqual((fetched, expected), (0, 0))
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_23_cancel_during_channel_execute_keeps_response_and_skips_threads(
+        self, get_service
+    ):
+        cancel_event = threading.Event()
+        service = self.make_service()
+        channel_response = {"items": [{"id": "channel-1"}]}
+
+        def execute_channel():
+            cancel_event.set()
+            return channel_response
+
+        service.channels.return_value.list.return_value.execute.side_effect = (
+            execute_channel
+        )
+        get_service.return_value = service
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertTrue(data["video_info_raw_response"]["items"])
+        self.assertIs(data["channel_info_raw_response"], channel_response)
+        service.commentThreads.return_value.list.assert_not_called()
+        self.assertEqual((fetched, expected), (0, 0))
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_24_cancel_during_thread_execute_keeps_page_and_accounts_all_parents(
+        self, get_service
+    ):
+        cancel_event = threading.Event()
+        page = {
+            "items": [
+                {"id": "parent-1", "snippet": {
+                    "totalReplyCount": 1,
+                    "topLevelComment": {"id": "parent-1"},
+                }},
+                {"id": "parent-2", "snippet": {
+                    "totalReplyCount": 0,
+                    "topLevelComment": {"id": "parent-2"},
+                }},
+            ],
+            "nextPageToken": "thread-page-2",
+        }
+        service = self.make_service()
+
+        def execute_threads():
+            cancel_event.set()
+            return page
+
+        service.commentThreads.return_value.list.return_value.execute.side_effect = (
+            execute_threads
+        )
+        get_service.return_value = service
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(data["comment_threads_raw_responses"], [page])
+        self.assertEqual(fetched, 2)
+        self.assertEqual(expected, 0)
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{"parent_id": "parent-1", "raw_responses": []}],
+        )
+        service.commentThreads.return_value.list.assert_called_once()
+        service.comments.return_value.list.assert_not_called()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_25_cancel_during_reply_execute_keeps_page_and_stops_next_reply_page(
+        self, get_service
+    ):
+        cancel_event = threading.Event()
+        thread_page = {"items": [{
+            "id": "parent-1",
+            "snippet": {
+                "totalReplyCount": 2,
+                "topLevelComment": {"id": "parent-1"},
+            },
+        }]}
+        reply_page = {
+            "items": [{"id": "reply-1"}],
+            "nextPageToken": "reply-page-2",
+        }
+        service = self.make_service(thread_page)
+
+        def execute_reply():
+            cancel_event.set()
+            return reply_page
+
+        service.comments.return_value.list.return_value.execute.side_effect = (
+            execute_reply
+        )
+        get_service.return_value = service
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{"parent_id": "parent-1", "raw_responses": [reply_page]}],
+        )
+        self.assertEqual((fetched, expected), (2, 3))
+        service.comments.return_value.list.assert_called_once()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_26_reply_exception_after_cancel_keeps_remaining_parent_comments(
+        self, get_service
+    ):
+        cancel_event = threading.Event()
+        thread_page = {"items": [
+            {"id": "parent-1", "snippet": {
+                "totalReplyCount": 1,
+                "topLevelComment": {"id": "parent-1"},
+            }},
+            {"id": "parent-2", "snippet": {
+                "totalReplyCount": 0,
+                "topLevelComment": {"id": "parent-2"},
+            }},
+        ]}
+        service = self.make_service(thread_page)
+
+        def fail_reply_after_cancel():
+            cancel_event.set()
+            raise RuntimeError("simulated reply failure")
+
+        service.comments.return_value.list.return_value.execute.side_effect = (
+            fail_reply_after_cancel
+        )
+        get_service.return_value = service
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(fetched, 2)
+        self.assertEqual(expected, 3)
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{"parent_id": "parent-1", "raw_responses": []}],
+        )
+        self.assertEqual(len(data["errors"]), 1)
+        self.assertEqual(data["errors"][0]["stage"], "reply_comments")
+        self.assertEqual(len(data["notifications"]), 1)
+        service.comments.return_value.list.assert_called_once()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_27_cancel_during_thread_page_wait_prevents_next_page(
+        self, get_service
+    ):
+        cancel_event = CancelDuringWait()
+        first_page = {
+            "items": [{
+                "id": "parent-1",
+                "snippet": {
+                    "totalReplyCount": 0,
+                    "topLevelComment": {"id": "parent-1"},
+                },
+            }],
+            "nextPageToken": "thread-page-2",
+        }
+        service = self.make_service(first_page)
+        get_service.return_value = service
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(fetched, 1)
+        self.assertEqual(expected, 0)
+        self.assertEqual(cancel_event.wait_calls, [0.1])
+        service.commentThreads.return_value.list.assert_called_once()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_s4_28_cancel_during_reply_page_wait_prevents_next_page(
+        self, get_service
+    ):
+        cancel_event = CancelDuringWait()
+        thread_page = {"items": [{
+            "id": "parent-1",
+            "snippet": {
+                "totalReplyCount": 2,
+                "topLevelComment": {"id": "parent-1"},
+            },
+        }]}
+        first_reply_page = {
+            "items": [{"id": "reply-1"}],
+            "nextPageToken": "reply-page-2",
+        }
+        service = self.make_service(thread_page, [first_reply_page])
+        get_service.return_value = service
+
+        data, fetched, expected = youtube_api_client.fetch_all_comments(
+            "key", "video", cancel_event=cancel_event
+        )
+
+        self.assertEqual(data["fetch_status"], "cancelled")
+        self.assertEqual(fetched, 2)
+        self.assertEqual(expected, 3)
+        self.assertEqual(cancel_event.wait_calls, [0.1])
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{"parent_id": "parent-1", "raw_responses": [first_reply_page]}],
+        )
+        service.comments.return_value.list.assert_called_once()
+
+
+class ShutdownPartialResultTests(Stage4AppTestCase):
+    """S4-29～S4-30：部分取得結果と終了時保存方針の接続。"""
+
+    def setUp(self):
+        self.app = self.make_app()
+        self.app.api_key = "stage4-test-api-key"
+        self.handle = self.make_running_handle(self.app)
+
+    def make_cancelled_result(self):
+        return {
+            "video_info_raw_response": {"items": [{"id": "video-1"}]},
+            "channel_info_raw_response": {"items": [{"id": "channel-1"}]},
+            "comment_threads_raw_responses": [{"items": [{"id": "parent-1"}]}],
+            "comment_replies_raw_responses": [{
+                "parent_id": "parent-1",
+                "raw_responses": [{"items": [{"id": "reply-1"}]}],
+            }],
+            "fetch_status": "cancelled",
+            "cancel_reason": "application_shutdown",
+            "errors": [],
+            "notifications": [],
+        }
+
+    def test_s4_29_save_partial_persists_available_data_and_records_results(self):
+        self.assertTrue(
+            self.handle.resolve_shutdown_decision(
+                "save_partial", cancel=True
+            )
+        )
+        fetch_result = self.make_cancelled_result()
+
+        with patch.object(
+            main.youtube_api_client,
+            "fetch_all_comments",
+            return_value=(fetch_result, 2, 0),
+        ):
+            with patch.object(
+                main.json_data_handler, "save_json_to_file", return_value=True
+            ) as save_file:
+                result = self.app._scrape_comments_task(
+                    self.handle, "abcdefghijk"
+                )
+
+        self.assertEqual(save_file.call_count, 4)
+        self.assertEqual(
+            [record["kind"] for record in result["saved_files"]],
+            ["video_info", "channel_info", "comments", "replies"],
+        )
+        self.assertTrue(all(record["success"] for record in result["saved_files"]))
+        self.assertEqual(
+            self.handle.partial_result["saved_files"], result["saved_files"]
+        )
+        self.assertEqual(
+            result["fetch_result"]["cancel_reason"], "application_shutdown"
+        )
+        self.assertTrue(self.handle.cancel_event.is_set())
+
+    def test_s4_30_skip_additional_save_does_not_call_save_or_delete_existing_data(
+        self
+    ):
+        self.assertTrue(
+            self.handle.resolve_shutdown_decision(
+                "skip_additional_save", cancel=True
+            )
+        )
+        fetch_result = self.make_cancelled_result()
+
+        with patch.object(
+            main.youtube_api_client,
+            "fetch_all_comments",
+            return_value=(fetch_result, 2, 0),
+        ):
+            with patch.object(
+                main.json_data_handler, "save_json_to_file"
+            ) as save_file:
+                result = self.app._scrape_comments_task(
+                    self.handle, "abcdefghijk"
+                )
+
+        save_file.assert_not_called()
+        self.assertEqual(result["saved_files"], [])
+        self.assertEqual(self.handle.partial_result["saved_files"], [])
+        self.assertEqual(
+            result["fetch_result"]["cancel_reason"], "application_shutdown"
+        )
+        notification_requests = [
+            request for request in list(self.app.gui_request_queue.queue)
+            if request.kind == "notification"
+        ]
+        self.assertEqual(len(notification_requests), 1)
+        self.assertIn(
+            "追加保存は行っていません",
+            notification_requests[0].payload["message"],
+        )
 
 
 if __name__ == "__main__":
