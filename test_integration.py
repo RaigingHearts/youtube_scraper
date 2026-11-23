@@ -1797,5 +1797,183 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.root = None
 
 
+    def _run_shutdown_save_barrier_case(
+        self, choice, expected_policy, expected_save_count, expect_cancel
+    ):
+        """終了確認の選択が実ワーカーの保存判断バリアを解放するまでを検証する。"""
+        app = self.make_app()
+        app.api_key = "integration-test-api-key"
+        api_started = threading.Event()
+        release_api = threading.Event()
+        save_barrier_reached = threading.Event()
+        save_calls = []
+
+        video_response = {"items": [{"id": "abcdefghijk"}]}
+        channel_response = {"items": [{"id": "channel-1"}]}
+        comment_responses = [{"items": [{"id": "comment-1"}]}]
+        reply_responses = [{"items": [{"id": "reply-1"}]}]
+        fetch_result = {
+            "fetch_status": "complete",
+            "video_info_raw_response": video_response,
+            "channel_info_raw_response": channel_response,
+            "comment_threads_raw_responses": comment_responses,
+            "comment_replies_raw_responses": reply_responses,
+            "notifications": [],
+        }
+
+        def fetch_until_shutdown_decision(*_args, **_kwargs):
+            api_started.set()
+            if not release_api.wait(5):
+                raise RuntimeError("API release event timed out")
+            return fetch_result, 1, 1
+
+        def save_file(data, filename, output_dir=None):
+            save_calls.append((data, filename, output_dir))
+            return True
+
+        original_begin_save = tk_async_tasks.WorkerHandle.begin_save
+
+        def observe_begin_save(handle):
+            save_barrier_reached.set()
+            return original_begin_save(handle)
+
+        def ask_shutdown(*_args, **_kwargs):
+            def reach_save_barrier():
+                release_api.set()
+                self.assertTrue(
+                    save_barrier_reached.wait(5),
+                    "ワーカーが保存判断バリアへ到達しませんでした。",
+                )
+                self.assertEqual(
+                    save_calls, [],
+                    "終了確認の選択が確定する前に保存が開始されました。",
+                )
+
+            self.run_nested_dialog(
+                "shutdown save decision",
+                reach_save_barrier,
+            )
+            return choice
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            virtual_main_file = os.path.join(
+                temporary_directory, "application", "main.py"
+            )
+            with patch.object(main, "__file__", virtual_main_file):
+                with patch.object(
+                    main.youtube_api_client,
+                    "fetch_all_comments",
+                    side_effect=fetch_until_shutdown_decision,
+                ) as fetch_comments:
+                    with patch.object(
+                        main.json_data_handler,
+                        "save_json_to_file",
+                        side_effect=save_file,
+                    ) as save_json:
+                        with patch.object(
+                            tk_async_tasks.WorkerHandle,
+                            "begin_save",
+                            observe_begin_save,
+                        ):
+                            with patch.object(
+                                main.messagebox,
+                                "askyesnocancel",
+                                side_effect=ask_shutdown,
+                            ) as ask_dialog:
+                                with patch.object(
+                                    main.tk_notifications, "show_info"
+                                ):
+                                    with patch.object(
+                                        main.tk_notifications, "show_warning"
+                                    ):
+                                        with patch.object(
+                                            main.messagebox, "showinfo"
+                                        ) as shutdown_summary:
+                                            handle = tk_async_tasks.run_task_in_thread(
+                                                app._scrape_comments_task,
+                                                app.gui_request_queue,
+                                                "abcdefghijk",
+                                            )
+                                            app.worker_handle = handle
+                                            app._schedule_gui_request_polling()
+                                            self.assertTrue(
+                                                api_started.wait(2),
+                                                "ワーカーがモックAPI処理へ到達しませんでした。",
+                                            )
+                                            self.root.after_idle(
+                                                app._on_close_request
+                                            )
+                                            expected_state = (
+                                                "running" if choice is None
+                                                else "closed"
+                                            )
+                                            self.run_event_loop_until(
+                                                lambda: handle.done_event.is_set()
+                                                and app.worker_handle is None
+                                                and app._shutdown_state
+                                                == expected_state
+                                            )
+
+        fetch_comments.assert_called_once()
+        ask_dialog.assert_called_once()
+        self.assertTrue(release_api.is_set())
+        self.assertTrue(save_barrier_reached.is_set())
+        self.assertTrue(handle.done_event.is_set())
+        self.assertIsNotNone(handle.thread)
+        self.assertFalse(handle.thread.is_alive())
+        self.assertIsNone(handle.exception)
+        self.assertEqual(handle.save_policy, expected_policy)
+        self.assertEqual(handle.cancel_event.is_set(), expect_cancel)
+        if expect_cancel:
+            self.assertEqual(handle.cancel_reason, "application_shutdown")
+        else:
+            self.assertIsNone(handle.cancel_reason)
+
+        self.assertEqual(save_json.call_count, expected_save_count)
+        self.assertEqual(len(save_calls), expected_save_count)
+        if expected_save_count:
+            self.assertEqual(
+                [call[1] for call in save_calls],
+                [
+                    "video_info_raw_abcdefghijk.json",
+                    "channel_info_raw_channel-1.json",
+                    "comments_raw_abcdefghijk.json",
+                    "comment_replies_raw_abcdefghijk.json",
+                ],
+            )
+        else:
+            self.assertEqual(handle.result["saved_files"], [])
+            self.assertEqual(handle.partial_result["saved_files"], [])
+
+        self.assertEqual(app._shutdown_state, (
+            "running" if choice is None else "closed"
+        ))
+        self.assertIsNone(app.worker_handle)
+        self.assertTrue(app.gui_request_queue.empty())
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertFalse(app._dialog_active)
+        self.assertIsNone(app._gui_poll_after_id)
+        self.assertTrue(self.root.winfo_exists())
+        if choice is None:
+            shutdown_summary.assert_not_called()
+        else:
+            shutdown_summary.assert_called_once()
+
+    def test_real_event_loop_shutdown_save_barrier_allows_partial_save_on_yes(self):
+        self._run_shutdown_save_barrier_case(
+            True, "save_partial", 4, True
+        )
+
+    def test_real_event_loop_shutdown_save_barrier_skips_additional_save_on_no(self):
+        self._run_shutdown_save_barrier_case(
+            False, "skip_additional_save", 0, True
+        )
+
+    def test_real_event_loop_shutdown_save_barrier_resumes_normal_save_on_cancel(self):
+        self._run_shutdown_save_barrier_case(
+            None, None, 4, False
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
