@@ -266,17 +266,70 @@ class TkStageIntegrationTests(unittest.TestCase):
             else:
                 self.run_nested_dialog(title)
 
-        # root破棄直前のafter登録と、アプリケーションが保持する予約IDを記録する。
-        # Tcl/Tkのafterコールバック警告が終了処理由来かを切り分ける診断用。
-        shutdown_diagnostics = {"cancelled_ids": []}
+        # ポーリングの再入階層、予約・キャンセル、root破棄時点を記録する。
+        # Tcl/Tkのafterコールバック警告が、実行中コールバックの破棄と
+        # 関係するかを切り分ける診断用。
+        shutdown_diagnostics = {
+            "cancelled_ids": [],
+            "events": [],
+            "poll_depth": 0,
+        }
+        original_poll = app._poll_gui_requests
+        original_schedule = app._schedule_gui_request_polling
         original_after_cancel = app.master.after_cancel
         original_destroy = app.master.destroy
 
+        def record_poll():
+            shutdown_diagnostics["poll_depth"] += 1
+            depth = shutdown_diagnostics["poll_depth"]
+            shutdown_diagnostics["events"].append(
+                ("poll_enter", depth, app._gui_poll_after_id, app._shutdown_state)
+            )
+            try:
+                return original_poll()
+            finally:
+                shutdown_diagnostics["events"].append(
+                    (
+                        "poll_exit",
+                        depth,
+                        app._gui_poll_after_id,
+                        app._shutdown_state,
+                    )
+                )
+                shutdown_diagnostics["poll_depth"] -= 1
+
+        def record_schedule():
+            previous_id = app._gui_poll_after_id
+            original_schedule()
+            shutdown_diagnostics["events"].append(
+                (
+                    "schedule",
+                    shutdown_diagnostics["poll_depth"],
+                    previous_id,
+                    app._gui_poll_after_id,
+                    app._shutdown_state,
+                )
+            )
+
         def record_after_cancel(after_id):
             shutdown_diagnostics["cancelled_ids"].append(after_id)
+            shutdown_diagnostics["events"].append(
+                ("after_cancel", shutdown_diagnostics["poll_depth"], after_id)
+            )
             return original_after_cancel(after_id)
 
         def inspect_destroy():
+            shutdown_diagnostics["events"].append(
+                (
+                    "destroy",
+                    shutdown_diagnostics["poll_depth"],
+                    app._gui_poll_after_id,
+                    app._shutdown_state,
+                )
+            )
+            shutdown_diagnostics["destroy_poll_depth"] = (
+                shutdown_diagnostics["poll_depth"]
+            )
             try:
                 after_ids = app.master.tk.call("after", "info")
                 if isinstance(after_ids, str):
@@ -293,6 +346,8 @@ class TkStageIntegrationTests(unittest.TestCase):
             shutdown_diagnostics["app_after_id"] = app._gui_poll_after_id
             return original_destroy()
 
+        app._poll_gui_requests = record_poll
+        app._schedule_gui_request_polling = record_schedule
         app.master.after_cancel = record_after_cancel
         app.master.destroy = inspect_destroy
         app._schedule_gui_request_polling()
@@ -319,6 +374,11 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertEqual(handle.cancel_reason, "application_shutdown")
         self.assertIsNone(app.worker_handle)
         self.assertEqual(app._shutdown_state, "closed")
+        print(
+            "Tk shutdown callback diagnostics: {!r}".format(
+                shutdown_diagnostics
+            )
+        )
         pending_poll_callbacks = [
             item for item in shutdown_diagnostics.get("pending_after", [])
             if "_poll_gui_requests" in str(item[1])
