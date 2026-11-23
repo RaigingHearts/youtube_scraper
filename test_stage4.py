@@ -1,6 +1,7 @@
 """Stage 4専用テスト：協調的キャンセルとアプリケーション終了制御。"""
 
 import queue
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -162,3 +163,197 @@ class ShutdownStateTests(Stage4AppTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ObservedEvent:
+    """Event待機開始を通知し、待機中のLock解放を検証する。"""
+
+    def __init__(self):
+        self._event = threading.Event()
+        self.wait_started = threading.Event()
+
+    def clear(self):
+        self._event.clear()
+
+    def set(self):
+        self._event.set()
+
+    def is_set(self):
+        return self._event.is_set()
+
+    def wait(self, timeout=None):
+        self.wait_started.set()
+        return self._event.wait(timeout)
+
+
+class ShutdownSaveBarrierTests(Stage4AppTestCase):
+    """S4-08～S4-14：保存判断バリアと競合状態。"""
+
+    def test_s4_08_begin_save_waits_without_holding_shutdown_lock(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        handle.shutdown_decision_event = ObservedEvent()
+        self.assertEqual(handle.begin_shutdown_decision(), "pending")
+        result = []
+        worker = threading.Thread(target=lambda: result.append(handle.begin_save()))
+
+        worker.start()
+        self.assertTrue(handle.shutdown_decision_event.wait_started.wait(2))
+        acquired = handle.shutdown_lock.acquire(timeout=2)
+        self.assertTrue(acquired)
+        if acquired:
+            handle.shutdown_lock.release()
+
+        self.assertTrue(worker.is_alive())
+        self.assertEqual(result, [])
+        handle.resolve_shutdown_decision("save_partial")
+        worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result, [True])
+        self.assertTrue(handle.save_started)
+
+    def test_s4_09_pending_decision_allows_save_after_save_partial_choice(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        self.assertEqual(handle.begin_shutdown_decision(), "pending")
+        result = []
+        worker = threading.Thread(target=lambda: result.append(handle.begin_save()))
+
+        worker.start()
+        self.assertTrue(handle.shutdown_decision_event.wait(0.02) is False)
+        self.assertEqual(result, [])
+        self.assertTrue(handle.resolve_shutdown_decision("save_partial"))
+        worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result, [True])
+        self.assertEqual(handle.save_policy, "save_partial")
+        self.assertTrue(handle.save_started)
+
+    def test_s4_10_skip_additional_save_releases_waiter_without_starting_save(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        self.assertEqual(handle.begin_shutdown_decision(), "pending")
+        result = []
+        worker = threading.Thread(target=lambda: result.append(handle.begin_save()))
+
+        worker.start()
+        self.assertTrue(handle.resolve_shutdown_decision("skip_additional_save"))
+        worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result, [False])
+        self.assertEqual(handle.save_policy, "skip_additional_save")
+        self.assertFalse(handle.save_started)
+
+    def test_s4_11_cancelled_shutdown_releases_waiter_for_normal_save(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        self.assertEqual(handle.begin_shutdown_decision(), "pending")
+        result = []
+        worker = threading.Thread(target=lambda: result.append(handle.begin_save()))
+
+        worker.start()
+        self.assertTrue(handle.resolve_shutdown_decision(None))
+        worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result, [True])
+        self.assertIsNone(handle.save_policy)
+        self.assertTrue(handle.save_started)
+        self.assertFalse(handle.cancel_event.is_set())
+        self.assertIsNone(handle.cancel_reason)
+
+    def test_s4_12_save_started_first_prevents_shutdown_pending_state(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+
+        self.assertTrue(handle.begin_save())
+        self.assertEqual(handle.begin_shutdown_decision(), "save_started")
+
+        self.assertTrue(handle.save_started)
+        self.assertFalse(handle.shutdown_pending)
+        self.assertIsNone(handle.save_policy)
+        self.assertFalse(handle.shutdown_decision_event.is_set())
+
+    def test_s4_13_shutdown_cancel_is_set_before_decision_event_is_released(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+
+        class InspectingEvent:
+            def __init__(self):
+                self.event = threading.Event()
+                self.state_when_set = None
+
+            def clear(self):
+                self.event.clear()
+
+            def set(self):
+                self.state_when_set = (
+                    handle.cancel_event.is_set(),
+                    handle.cancel_reason,
+                )
+                self.event.set()
+
+            def is_set(self):
+                return self.event.is_set()
+
+            def wait(self, timeout=None):
+                return self.event.wait(timeout)
+
+        observed_event = InspectingEvent()
+        handle.shutdown_decision_event = observed_event
+        self.assertEqual(handle.begin_shutdown_decision(), "pending")
+
+        self.assertTrue(
+            handle.resolve_shutdown_decision("save_partial", cancel=True)
+        )
+
+        self.assertEqual(
+            observed_event.state_when_set,
+            (True, "application_shutdown"),
+        )
+        self.assertTrue(observed_event.is_set())
+        self.assertFalse(handle.shutdown_pending)
+
+    def test_s4_14_save_start_and_shutdown_pending_have_one_winning_order(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        start_gate = threading.Barrier(3)
+        decision_result = []
+        save_result = []
+        errors = []
+
+        def decide_shutdown():
+            try:
+                start_gate.wait()
+                decision_result.append(handle.begin_shutdown_decision())
+            except BaseException as exc:
+                errors.append(exc)
+
+        def begin_save():
+            try:
+                start_gate.wait()
+                save_result.append(handle.begin_save())
+            except BaseException as exc:
+                errors.append(exc)
+
+        decision_thread = threading.Thread(target=decide_shutdown)
+        save_thread = threading.Thread(target=begin_save)
+        decision_thread.start()
+        save_thread.start()
+        start_gate.wait()
+
+        decision_thread.join(2)
+        self.assertFalse(decision_thread.is_alive())
+        self.assertEqual(len(decision_result), 1)
+
+        if decision_result[0] == "pending":
+            self.assertTrue(handle.resolve_shutdown_decision("save_partial"))
+        else:
+            self.assertEqual(decision_result[0], "save_started")
+
+        save_thread.join(2)
+        self.assertFalse(save_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(save_result, [True])
+        self.assertTrue(handle.save_started)
+        self.assertFalse(handle.shutdown_pending)
+        if decision_result[0] == "pending":
+            self.assertEqual(handle.save_policy, "save_partial")
+        else:
+            self.assertIsNone(handle.save_policy)
