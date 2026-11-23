@@ -87,27 +87,44 @@ class TkStageIntegrationTests(unittest.TestCase):
         root = getattr(self, "root", None)
         try:
             if root is not None:
-                # root.destroy()前に採取し、終了時点のタイマーとコマンドを保持する。
+                # root.destroy()前に未処理タイマーを採取し、テスト間への持ち越しを防ぐ。
                 try:
+                    pending_ids = list(root.tk.call("after", "info"))
                     pending = [
                         (after_id, root.tk.call("after", "info", after_id))
-                        for after_id in root.tk.call("after", "info")
+                        for after_id in pending_ids
                     ]
                     commands = list(root._tclCommands or [])
                 except tk.TclError as exc:
+                    pending_ids = []
                     pending = "inspection failed: {}".format(exc)
                     commands = []
                 relevant_events = [
                     event for event in self.tk_callback_trace
                     if "_poll_gui_requests" in repr(event)
                 ]
+
+                # after / after_idle の予約を先に取り消し、対応するTclコマンドも削除する。
+                if root.winfo_exists():
+                    for after_id in pending_ids:
+                        try:
+                            root.after_cancel(after_id)
+                        except tk.TclError:
+                            pass
+
+                try:
+                    remaining_after = list(root.tk.call("after", "info"))
+                except tk.TclError as exc:
+                    remaining_after = "inspection failed: {}".format(exc)
+
                 if relevant_events or pending:
                     print(
                         "Tk test-wide callback trace: {!r}".format(
                             {
                                 "poll_callback_events": relevant_events,
-                                "pending_after": pending,
-                                "registered_commands": commands,
+                                "pending_after_before_cleanup": pending,
+                                "pending_after_after_cleanup": remaining_after,
+                                "registered_commands_before_cleanup": commands,
                             }
                         )
                     )
