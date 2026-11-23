@@ -364,3 +364,116 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShutdownWorkerRaceTests(Stage4AppTestCase):
+    """S4-15～S4-20：自然完了との競合とワーカー終了待ち。"""
+
+    def test_s4_15_shutdown_decision_reports_complete_after_worker_finishes(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        handle.done_event.set()
+
+        self.assertEqual(handle.begin_shutdown_decision(), "complete")
+        self.assertFalse(handle.shutdown_pending)
+        self.assertFalse(handle.cancel_event.is_set())
+        self.assertFalse(handle.shutdown_decision_event.is_set())
+
+    def test_s4_16_worker_completion_wins_before_shutdown_decision_resolution(self):
+        handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        self.assertEqual(handle.begin_shutdown_decision(), "pending")
+
+        handle.done_event.set()
+        resolved = handle.resolve_shutdown_decision(
+            "save_partial", cancel=True
+        )
+
+        self.assertFalse(resolved)
+        self.assertFalse(handle.shutdown_pending)
+        self.assertTrue(handle.shutdown_decision_event.is_set())
+        self.assertIsNone(handle.save_policy)
+        self.assertFalse(handle.cancel_event.is_set())
+        self.assertIsNone(handle.cancel_reason)
+
+    def test_s4_17_finish_worker_waits_until_thread_is_not_alive(self):
+        app = self.make_app()
+        handle = self.make_running_handle(app)
+        handle.done_event.set()
+        handle.thread = MagicMock()
+        handle.thread.is_alive.return_value = True
+
+        app._shutdown_state = "stopping"
+        app._finish_worker(handle)
+
+        handle.thread.join.assert_called_once_with(timeout=0)
+        self.assertIs(app.worker_handle, handle)
+        self.assertEqual(app._shutdown_state, "stopping")
+        app.master.destroy.assert_not_called()
+
+    def test_s4_18_finish_worker_waits_until_gui_request_queue_is_drained(self):
+        app = self.make_app()
+        handle = self.make_running_handle(app)
+        handle.done_event.set()
+        handle.thread = MagicMock()
+        handle.thread.is_alive.return_value = False
+        request = tk_async_tasks.GuiRequest(
+            kind="notification",
+            payload={"kind": "info", "title": "pending", "message": "notice"},
+        )
+        app.gui_request_queue.put(request)
+        app._shutdown_state = "stopping"
+
+        app._finish_worker(handle)
+
+        self.assertIs(app.worker_handle, handle)
+        self.assertEqual(app._shutdown_state, "stopping")
+        self.assertFalse(handle.exception_notification_queued)
+        app.master.destroy.assert_not_called()
+
+    def test_s4_19_shutdown_finalizes_only_after_worker_thread_has_joined(self):
+        app = self.make_app()
+        handle = self.make_running_handle(app)
+        handle.done_event.set()
+        handle.thread = MagicMock()
+        handle.thread.is_alive.return_value = False
+        handle.result = {"saved_files": []}
+        app._shutdown_state = "stopping"
+
+        app._finish_worker(handle)
+
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app._shutdown_state, "closed")
+        app.master.destroy.assert_called_once_with()
+        self.assertEqual(app.open_json_button.config.call_args.kwargs["state"], main.tk.DISABLED)
+        self.assertEqual(app.scrape_button.config.call_args.kwargs["state"], main.tk.NORMAL)
+
+    def test_s4_20_shutdown_cancellation_is_cooperative_not_forced_thread_termination(self):
+        gui_queue = queue.Queue()
+        worker_started = threading.Event()
+        allow_worker_exit = threading.Event()
+
+        def task(handle):
+            worker_started.set()
+            allow_worker_exit.wait()
+            return "finished"
+
+        handle = tk_async_tasks.run_task_in_thread(task, gui_queue)
+        self.assertTrue(worker_started.wait(2))
+        self.assertFalse(handle.thread.daemon)
+
+        handle.cancel_for_shutdown()
+
+        self.assertTrue(handle.cancel_event.is_set())
+        self.assertFalse(handle.done_event.is_set())
+        self.assertTrue(handle.thread.is_alive())
+
+        allow_worker_exit.set()
+        handle.thread.join(2)
+
+        self.assertFalse(handle.thread.is_alive())
+        self.assertTrue(handle.done_event.is_set())
+        self.assertEqual(handle.result, "finished")
+
+
+
+if __name__ == "__main__":
+    unittest.main()
