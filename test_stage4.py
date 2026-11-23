@@ -214,12 +214,13 @@ class ShutdownSaveBarrierTests(Stage4AppTestCase):
 
     def test_s4_09_pending_decision_allows_save_after_save_partial_choice(self):
         handle = tk_async_tasks.WorkerHandle(queue.Queue())
+        handle.shutdown_decision_event = ObservedEvent()
         self.assertEqual(handle.begin_shutdown_decision(), "pending")
         result = []
         worker = threading.Thread(target=lambda: result.append(handle.begin_save()))
 
         worker.start()
-        self.assertTrue(handle.shutdown_decision_event.wait(0.02) is False)
+        self.assertTrue(handle.shutdown_decision_event.wait_started.wait(2))
         self.assertEqual(result, [])
         self.assertTrue(handle.resolve_shutdown_decision("save_partial"))
         worker.join(2)
