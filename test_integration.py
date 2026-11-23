@@ -1952,12 +1952,19 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertTrue(app.gui_request_queue.empty())
         self.assertEqual(app._pending_modal_requests, [])
         self.assertFalse(app._dialog_active)
-        self.assertIsNone(app._gui_poll_after_id)
-        self.assertTrue(self.root.winfo_exists())
         if choice is None:
+            # キャンセル時はアプリが running に戻るため、GUI要求の
+            # ポーリング予約が継続していることが正常。
+            self.assertIsNotNone(app._gui_poll_after_id)
+            pending_after = self.root.tk.call(
+                "after", "info", app._gui_poll_after_id
+            )
+            self.assertTrue(pending_after)
             shutdown_summary.assert_not_called()
         else:
+            self.assertIsNone(app._gui_poll_after_id)
             shutdown_summary.assert_called_once()
+        self.assertTrue(self.root.winfo_exists())
 
     def test_real_event_loop_shutdown_save_barrier_allows_partial_save_on_yes(self):
         self._run_shutdown_save_barrier_case(
