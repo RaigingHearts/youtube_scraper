@@ -266,6 +266,35 @@ class TkStageIntegrationTests(unittest.TestCase):
             else:
                 self.run_nested_dialog(title)
 
+        # root破棄直前のafter登録と、アプリケーションが保持する予約IDを記録する。
+        # Tcl/Tkのafterコールバック警告が終了処理由来かを切り分ける診断用。
+        shutdown_diagnostics = {"cancelled_ids": []}
+        original_after_cancel = app.master.after_cancel
+        original_destroy = app.master.destroy
+
+        def record_after_cancel(after_id):
+            shutdown_diagnostics["cancelled_ids"].append(after_id)
+            return original_after_cancel(after_id)
+
+        def inspect_destroy():
+            try:
+                after_ids = app.master.tk.call("after", "info")
+                if isinstance(after_ids, str):
+                    after_ids = (after_ids,) if after_ids else ()
+                shutdown_diagnostics["pending_after"] = [
+                    (
+                        after_id,
+                        app.master.tk.call("after", "info", after_id),
+                    )
+                    for after_id in after_ids
+                ]
+            except tk.TclError as exc:
+                shutdown_diagnostics["inspection_error"] = str(exc)
+            shutdown_diagnostics["app_after_id"] = app._gui_poll_after_id
+            return original_destroy()
+
+        app.master.after_cancel = record_after_cancel
+        app.master.destroy = inspect_destroy
         app._schedule_gui_request_polling()
         with patch.object(
             main.tk_notifications, "show_info", side_effect=show_info
@@ -290,6 +319,17 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertEqual(handle.cancel_reason, "application_shutdown")
         self.assertIsNone(app.worker_handle)
         self.assertEqual(app._shutdown_state, "closed")
+        pending_poll_callbacks = [
+            item for item in shutdown_diagnostics.get("pending_after", [])
+            if "_poll_gui_requests" in str(item[1])
+        ]
+        self.assertEqual(
+            pending_poll_callbacks,
+            [],
+            "root破棄時にGUIポーリングのafter予約が残っています: {!r}".format(
+                shutdown_diagnostics
+            ),
+        )
         self.assertEqual(len(app._shutdown_notifications), 1)
         self.assertEqual(
             app._shutdown_notifications[0]["title"], "queued notification"
