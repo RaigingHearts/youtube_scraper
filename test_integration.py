@@ -345,9 +345,39 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertEqual(handle.cancel_reason, "application_shutdown")
         self.assertIsNone(app.worker_handle)
         self.assertEqual(app._shutdown_state, "closed")
+
+        # mainloop()終了後、tearDown()によるroot.destroy()前のTcl状態を採取する。
+        pending_after_ids = self.root.tk.call("after", "info")
+        pending_after = []
+        for after_id in pending_after_ids:
+            try:
+                pending_after.append(
+                    (after_id, self.root.tk.call("after", "info", after_id))
+                )
+            except tk.TclError as exc:
+                pending_after.append((after_id, "inspection failed: {}".format(exc)))
+        try:
+            poll_commands = self.root.tk.call(
+                "info", "commands", "*poll_gui_requests*"
+            )
+        except tk.TclError as exc:
+            poll_commands = "inspection failed: {}".format(exc)
+        tcl_diagnostics = {
+            "pending_after": pending_after,
+            "poll_commands": poll_commands,
+            "registered_tk_commands": list(self.root._tclCommands or []),
+            "app_poll_after_id": app._gui_poll_after_id,
+            "shutdown_state": app._shutdown_state,
+            "root_exists": bool(self.root.winfo_exists()),
+        }
         print(
             "Tk shutdown callback diagnostics: {!r}".format(
                 shutdown_diagnostics
+            )
+        )
+        print(
+            "Tk post-mainloop Tcl diagnostics: {!r}".format(
+                tcl_diagnostics
             )
         )
         self.assertEqual(
