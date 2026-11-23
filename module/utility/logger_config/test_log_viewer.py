@@ -20,6 +20,8 @@ class LogViewerTests(unittest.TestCase):
                 with patch.object(log_viewer.tk, "Button", return_value=self.button):
                     window = log_viewer.show_log_window(parent=MagicMock())
         self.assertIs(window, self.window)
+        # show_log_window performs an initial load; isolate each test's explicit refresh.
+        self.text_area.reset_mock()
         return self.button.call_args.kwargs["command"]
 
     def test_existing_log_file_is_read_as_utf8_and_displayed(self):
