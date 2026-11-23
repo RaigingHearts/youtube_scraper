@@ -151,6 +151,7 @@ class TkNotificationsTests(unittest.TestCase):
         label_widget = MagicMock()
         radio_widget = MagicMock()
         button_widget = MagicMock()
+        observed_open_command = {}
 
         with patch.object(
             tk_notifications.tk, "Toplevel", return_value=choice_window
@@ -169,7 +170,9 @@ class TkNotificationsTests(unittest.TestCase):
                         ) as string_var:
                             def select_second_file(window):
                                 self.assertIs(window, choice_window)
-                                button_factory.call_args.kwargs["command"]()
+                                callback = button_factory.call_args.kwargs["command"]
+                                observed_open_command["callback"] = callback
+                                callback()
 
                             self.master_root.wait_window.side_effect = select_second_file
                             result = tk_notifications.show_file_selection_dialog(
@@ -207,13 +210,19 @@ class TkNotificationsTests(unittest.TestCase):
                 ),
             ],
         )
-        self.assertEqual(radio_widget.pack.call_args_list, [
-            call(anchor="w", padx=20),
-            call(anchor="w", padx=20),
-        ])
-        button_factory.assert_called_once_with(
-            choice_window, text="開く", command=button_factory.call_args.kwargs["command"]
+        self.assertEqual(
+            radio_widget.pack.call_args_list,
+            [call(anchor="w", padx=20), call(anchor="w", padx=20)],
         )
+        self.assertEqual(
+            button_factory.call_args,
+            call(
+                choice_window,
+                text="開く",
+                command=observed_open_command["callback"],
+            ),
+        )
+        self.assertTrue(callable(observed_open_command["callback"]))
         button_widget.pack.assert_called_once_with(pady=10)
         self.master_root.wait_window.assert_called_once_with(choice_window)
         choice_window.destroy.assert_called_once_with()
