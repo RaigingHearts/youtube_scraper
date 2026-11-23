@@ -229,19 +229,19 @@ class TkStageIntegrationTests(unittest.TestCase):
                             and app.worker_handle is None
                         )
 
-            self.assertEqual(ask_shutdown.call_count, 1)
-            self.assertTrue(handle.result)
-            self.assertFalse(handle.cancel_event.is_set())
-            self.assertEqual(
-                self.dialog_order,
-                [
-                    "initial notification",
-                    "worker confirmation",
-                    "queued notification",
-                ],
-            )
-            self.assertEqual(app._shutdown_state, "running")
-            self.assertEqual(app._pending_modal_requests, [])
+        self.assertEqual(ask_shutdown.call_count, 1)
+        self.assertTrue(handle.result)
+        self.assertFalse(handle.cancel_event.is_set())
+        self.assertEqual(
+            self.dialog_order,
+            [
+                "initial notification",
+                "worker confirmation",
+                "queued notification",
+            ],
+        )
+        self.assertEqual(app._shutdown_state, "running")
+        self.assertEqual(app._pending_modal_requests, [])
 
     def test_confirmed_shutdown_answers_pending_confirmation_and_summarizes_notice(self):
         app = self.make_app()
