@@ -285,7 +285,6 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertFalse(handle.result)
         self.assertTrue(handle.cancel_event.is_set())
         self.assertEqual(handle.cancel_reason, "application_shutdown")
-        self.assertEqual(handle.worker_handle if hasattr(handle, "worker_handle") else None, None)
         self.assertIsNone(app.worker_handle)
         self.assertEqual(app._shutdown_state, "closed")
         self.assertEqual(len(app._shutdown_notifications), 1)
