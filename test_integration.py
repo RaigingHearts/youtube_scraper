@@ -1982,5 +1982,321 @@ class TkStageIntegrationTests(unittest.TestCase):
         )
 
 
+    def test_real_event_loop_finishes_started_save_after_shutdown_request(self):
+        app = self.make_app()
+        app.api_key = "integration-test-api-key"
+        save_started = threading.Event()
+        release_save = threading.Event()
+        dialog_observations = []
+        save_calls = []
+
+        video_response = {"items": [{"id": "abcdefghijk"}]}
+        channel_response = {"items": [{"id": "channel-1"}]}
+        comment_responses = [{"items": [{"id": "comment-1"}]}]
+        reply_responses = [{"items": [{"id": "reply-1"}]}]
+        fetch_result = {
+            "fetch_status": "complete",
+            "video_info_raw_response": video_response,
+            "channel_info_raw_response": channel_response,
+            "comment_threads_raw_responses": comment_responses,
+            "comment_replies_raw_responses": reply_responses,
+            "notifications": [],
+        }
+
+        def save_file(data, filename, output_dir=None):
+            save_calls.append((data, filename, output_dir))
+            if len(save_calls) == 1:
+                save_started.set()
+                if not release_save.wait(5):
+                    raise RuntimeError("save release event timed out")
+            return True
+
+        def ask_shutdown(title, message, **_kwargs):
+            def observe_and_release_save():
+                dialog_observations.append({
+                    "save_started": save_started.is_set(),
+                    "save_calls": len(save_calls),
+                    "worker_done": handle.done_event.is_set(),
+                    "shutdown_state": app._shutdown_state,
+                })
+                release_save.set()
+
+            self.run_nested_dialog(
+                "shutdown confirmation",
+                observe_and_release_save,
+            )
+            self.assertEqual(title, "終了確認")
+            self.assertIn("保存処理はすでに開始されています", message)
+            return True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            virtual_main_file = os.path.join(
+                temporary_directory, "application", "main.py"
+            )
+            with patch.object(main, "__file__", virtual_main_file):
+                with patch.object(
+                    main.youtube_api_client,
+                    "fetch_all_comments",
+                    return_value=(fetch_result, 1, 1),
+                ) as fetch_comments:
+                    with patch.object(
+                        main.json_data_handler,
+                        "save_json_to_file",
+                        side_effect=save_file,
+                    ) as save_json:
+                        with patch.object(
+                            main.messagebox,
+                            "askyesnocancel",
+                            side_effect=ask_shutdown,
+                        ) as ask_dialog:
+                            with patch.object(
+                                main.tk_notifications, "show_info"
+                            ):
+                                with patch.object(
+                                    main.tk_notifications, "show_warning"
+                                ):
+                                    with patch.object(
+                                        main.messagebox, "showinfo"
+                                    ) as shutdown_summary:
+                                        handle = tk_async_tasks.run_task_in_thread(
+                                            app._scrape_comments_task,
+                                            app.gui_request_queue,
+                                            "abcdefghijk",
+                                        )
+                                        app.worker_handle = handle
+                                        app._schedule_gui_request_polling()
+                                        self.assertTrue(
+                                            save_started.wait(2),
+                                            "ワーカーが保存処理を開始しませんでした。",
+                                        )
+                                        self.root.after_idle(app._on_close_request)
+                                        self.run_event_loop_until(
+                                            lambda: handle.done_event.is_set()
+                                            and app.worker_handle is None
+                                            and app._shutdown_state == "closed"
+                                        )
+
+        fetch_comments.assert_called_once()
+        ask_dialog.assert_called_once()
+        self.assertEqual(
+            dialog_observations,
+            [{
+                "save_started": True,
+                "save_calls": 1,
+                "worker_done": False,
+                "shutdown_state": "shutdown_pending",
+            }],
+        )
+        self.assertTrue(release_save.is_set())
+        self.assertTrue(handle.done_event.is_set())
+        self.assertFalse(handle.thread.is_alive())
+        self.assertIsNone(handle.exception)
+        self.assertTrue(handle.cancel_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+        # 保存開始後の終了確認では、既に開始した保存方針を変更しない。
+        self.assertIsNone(handle.save_policy)
+
+        expected_names = [
+            "video_info_raw_abcdefghijk.json",
+            "channel_info_raw_channel-1.json",
+            "comments_raw_abcdefghijk.json",
+            "comment_replies_raw_abcdefghijk.json",
+        ]
+        self.assertEqual(save_json.call_count, 4)
+        self.assertEqual([call[1] for call in save_calls], expected_names)
+        self.assertIs(save_calls[0][0], video_response)
+        self.assertIs(save_calls[1][0], channel_response)
+        self.assertIs(save_calls[2][0], comment_responses)
+        self.assertIs(save_calls[3][0], reply_responses)
+
+        records = handle.result["saved_files"]
+        self.assertEqual(len(records), 4)
+        self.assertTrue(all(record["success"] for record in records))
+        self.assertEqual(
+            app.last_saved_video_info_file_path, records[0]["path"]
+        )
+        self.assertEqual(
+            app.last_saved_channel_info_file_path, records[1]["path"]
+        )
+        self.assertEqual(
+            app.last_saved_comment_file_path, records[2]["path"]
+        )
+        self.assertEqual(
+            app.last_saved_replies_file_path, records[3]["path"]
+        )
+        app.open_json_button.config.assert_any_call(state=tk.NORMAL)
+        app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+
+        shutdown_summary.assert_called_once()
+        summary_text = shutdown_summary.call_args.args[1]
+        self.assertIn("取得完了", summary_text)
+        self.assertIn(expected_names[0], summary_text)
+        self.assertIn(expected_names[3], summary_text)
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app._shutdown_state, "closed")
+        self.assertTrue(app.gui_request_queue.empty())
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertFalse(app._dialog_active)
+        self.assertIsNone(app._gui_poll_after_id)
+        self.assertTrue(self.root.winfo_exists())
+
+        self.root.destroy()
+        with self.assertRaises(tk.TclError):
+            self.root.winfo_exists()
+        self.root = None
+
+    def test_real_event_loop_recovers_partial_save_after_unexpected_worker_exception_during_shutdown(self):
+        app = self.make_app()
+        app.api_key = "integration-test-api-key"
+        save_started = threading.Event()
+        release_save = threading.Event()
+        dialog_observations = []
+        save_calls = []
+
+        video_response = {"items": [{"id": "abcdefghijk"}]}
+        fetch_result = {
+            "fetch_status": "complete",
+            "video_info_raw_response": video_response,
+            "channel_info_raw_response": {},
+            "comment_threads_raw_responses": [],
+            "comment_replies_raw_responses": [],
+            "notifications": [],
+        }
+
+        class AppendThenRaise(list):
+            def append(self, record):
+                super().append(record)
+                if len(self) == 1:
+                    raise RuntimeError(
+                        "simulated failure after first saved-file record"
+                    )
+
+        def save_file(data, filename, output_dir=None):
+            save_calls.append((data, filename, output_dir))
+            save_started.set()
+            if not release_save.wait(5):
+                raise RuntimeError("save release event timed out")
+            return True
+
+        def ask_shutdown(title, message, **_kwargs):
+            def observe_and_release_save():
+                dialog_observations.append({
+                    "save_started": save_started.is_set(),
+                    "save_calls": len(save_calls),
+                    "worker_done": handle.done_event.is_set(),
+                    "shutdown_state": app._shutdown_state,
+                })
+                release_save.set()
+
+            self.run_nested_dialog(
+                "shutdown confirmation",
+                observe_and_release_save,
+            )
+            self.assertEqual(title, "終了確認")
+            self.assertIn("保存処理はすでに開始されています", message)
+            return True
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            virtual_main_file = os.path.join(
+                temporary_directory, "application", "main.py"
+            )
+            with patch.object(main, "__file__", virtual_main_file):
+                with patch.object(
+                    main.youtube_api_client,
+                    "fetch_all_comments",
+                    return_value=(fetch_result, 0, 0),
+                ) as fetch_comments:
+                    with patch.object(
+                        main.json_data_handler,
+                        "save_json_to_file",
+                        side_effect=save_file,
+                    ) as save_json:
+                        with patch.object(
+                            main.messagebox,
+                            "askyesnocancel",
+                            side_effect=ask_shutdown,
+                        ) as ask_dialog:
+                            with patch.object(
+                                main.messagebox, "showinfo"
+                            ) as shutdown_summary:
+                                handle = tk_async_tasks.run_task_in_thread(
+                                    app._scrape_comments_task,
+                                    app.gui_request_queue,
+                                    "abcdefghijk",
+                                )
+                                handle.partial_result["saved_files"] = AppendThenRaise()
+                                app.worker_handle = handle
+                                app._schedule_gui_request_polling()
+                                self.assertTrue(
+                                    save_started.wait(2),
+                                    "ワーカーが保存処理を開始しませんでした。",
+                                )
+                                self.root.after_idle(app._on_close_request)
+                                self.run_event_loop_until(
+                                    lambda: handle.done_event.is_set()
+                                    and app.worker_handle is None
+                                    and app._shutdown_state == "closed"
+                                )
+
+        fetch_comments.assert_called_once()
+        ask_dialog.assert_called_once()
+        self.assertEqual(
+            dialog_observations,
+            [{
+                "save_started": True,
+                "save_calls": 1,
+                "worker_done": False,
+                "shutdown_state": "shutdown_pending",
+            }],
+        )
+        self.assertTrue(release_save.is_set())
+        self.assertEqual(save_json.call_count, 1)
+        self.assertEqual(save_calls[0][1], "video_info_raw_abcdefghijk.json")
+        self.assertIs(save_calls[0][0], video_response)
+        self.assertTrue(handle.done_event.is_set())
+        self.assertFalse(handle.thread.is_alive())
+        self.assertIsInstance(handle.exception, RuntimeError)
+        self.assertEqual(
+            str(handle.exception),
+            "simulated failure after first saved-file record",
+        )
+        self.assertTrue(handle.cancel_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+        self.assertIsNone(handle.save_policy)
+
+        records = handle.partial_result["saved_files"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["kind"], "video_info")
+        self.assertTrue(records[0]["success"])
+        self.assertEqual(
+            app.last_saved_video_info_file_path, records[0]["path"]
+        )
+        self.assertIsNone(app.last_saved_channel_info_file_path)
+        self.assertIsNone(app.last_saved_comment_file_path)
+        self.assertIsNone(app.last_saved_replies_file_path)
+        app.open_json_button.config.assert_any_call(state=tk.NORMAL)
+        app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+
+        shutdown_summary.assert_called_once()
+        summary_text = shutdown_summary.call_args.args[1]
+        self.assertIn("取得失敗", summary_text)
+        self.assertIn(
+            "simulated failure after first saved-file record",
+            summary_text,
+        )
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app._shutdown_state, "closed")
+        self.assertTrue(app.gui_request_queue.empty())
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertFalse(app._dialog_active)
+        self.assertIsNone(app._gui_poll_after_id)
+        self.assertTrue(self.root.winfo_exists())
+
+        self.root.destroy()
+        with self.assertRaises(tk.TclError):
+            self.root.winfo_exists()
+        self.root = None
+
+
 if __name__ == "__main__":
     unittest.main()
