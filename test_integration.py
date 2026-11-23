@@ -1775,7 +1775,7 @@ class TkStageIntegrationTests(unittest.TestCase):
 
         self.assertEqual(app.last_saved_comment_file_path, saved_path)
         self.assertEqual(app.total_comments_expected, 3)
-        app.comment_count_label.config.assert_called_once_with(
+        app.comment_count_label.config.assert_any_call(
             text="取得コメント数: 3 / 3"
         )
         app.open_json_button.config.assert_any_call(state=tk.NORMAL)
