@@ -1075,5 +1075,185 @@ class TkStageIntegrationTests(unittest.TestCase):
         self.assertIsNone(app._gui_poll_after_id)
 
 
+    def test_real_event_loop_saves_video_response_returned_after_shutdown_request(self):
+        app = self.make_app()
+        app.api_key = "integration-test-api-key"
+
+        api_execute_started = threading.Event()
+        release_api_execute = threading.Event()
+        api_execute_returned = threading.Event()
+        dialog_observations = []
+        shutdown_observations = []
+        video_response = {
+            "items": [{
+                "id": "video-1",
+                "snippet": {
+                    "channelId": "channel-1",
+                    "title": "integration video",
+                },
+            }]
+        }
+
+        service = MagicMock()
+
+        def execute_video_request():
+            api_execute_started.set()
+            if not release_api_execute.wait(5):
+                raise RuntimeError("API execute release event timed out")
+            api_execute_returned.set()
+            return video_response
+
+        service.videos.return_value.list.return_value.execute.side_effect = (
+            execute_video_request
+        )
+
+        handle = tk_async_tasks.run_task_in_thread(
+            app._scrape_comments_task,
+            app.gui_request_queue,
+            "abcdefghijk",
+        )
+        app.worker_handle = handle
+
+        self.assertTrue(
+            api_execute_started.wait(2),
+            "ワーカーが動画情報APIのexecute()へ到達しませんでした。",
+        )
+
+        def ask_shutdown_confirmation(*_args, **_kwargs):
+            def observe_visible_shutdown_dialog():
+                dialog_observations.append({
+                    "api_execute_returned": api_execute_returned.is_set(),
+                    "worker_done": handle.done_event.is_set(),
+                    "cancel_event_set": handle.cancel_event.is_set(),
+                    "shutdown_state": app._shutdown_state,
+                })
+
+            self.run_nested_dialog(
+                "shutdown confirmation",
+                observe_visible_shutdown_dialog,
+            )
+            return True
+
+        def request_shutdown_during_api_call():
+            app._on_close_request()
+            shutdown_observations.append({
+                "api_execute_returned": api_execute_returned.is_set(),
+                "worker_done": handle.done_event.is_set(),
+                "cancel_event_set": handle.cancel_event.is_set(),
+                "save_policy": handle.save_policy,
+                "shutdown_state": app._shutdown_state,
+            })
+            # 終了確認と終了方針の確定後、Tkイベントループ上の別コールバックで
+            # API応答を解放する。通信中にGUIが応答できたことも同時に確認する。
+            self.root.after_idle(release_api_execute.set)
+
+        app._schedule_gui_request_polling()
+        self.root.after_idle(request_shutdown_during_api_call)
+
+        try:
+            with patch.object(
+                main.youtube_api_client,
+                "get_youtube_service",
+                return_value=service,
+            ) as get_service:
+                with patch.object(
+                    main.json_data_handler,
+                    "save_json_to_file",
+                    return_value=True,
+                ) as save_json:
+                    with patch.object(
+                        main.messagebox,
+                        "askyesnocancel",
+                        side_effect=ask_shutdown_confirmation,
+                    ) as ask_shutdown:
+                        with patch.object(
+                            main.messagebox, "showinfo"
+                        ) as shutdown_summary:
+                            self.run_event_loop_until(
+                                lambda: handle.done_event.is_set()
+                                and app.worker_handle is None
+                                and app._shutdown_state == "closed"
+                            )
+        finally:
+            release_api_execute.set()
+            if handle.thread is not None and handle.thread.is_alive():
+                handle.thread.join(timeout=2)
+
+        get_service.assert_called_once_with(
+            "integration-test-api-key",
+            error_callback=unittest.mock.ANY,
+        )
+        service.videos.return_value.list.assert_called_once_with(
+            part="snippet", id="abcdefghijk"
+        )
+        service.videos.return_value.list.return_value.execute.assert_called_once_with()
+        service.channels.return_value.list.assert_not_called()
+        service.commentThreads.return_value.list.assert_not_called()
+        service.comments.return_value.list.assert_not_called()
+
+        ask_shutdown.assert_called_once()
+        self.assertEqual(
+            dialog_observations,
+            [{
+                "api_execute_returned": False,
+                "worker_done": False,
+                "cancel_event_set": False,
+                "shutdown_state": "shutdown_pending",
+            }],
+        )
+        self.assertEqual(
+            shutdown_observations,
+            [{
+                "api_execute_returned": False,
+                "worker_done": False,
+                "cancel_event_set": True,
+                "save_policy": "save_partial",
+                "shutdown_state": "stopping",
+            }],
+        )
+        self.assertTrue(api_execute_returned.is_set())
+        self.assertTrue(handle.cancel_event.is_set())
+        self.assertEqual(handle.cancel_reason, "application_shutdown")
+
+        self.assertIsNone(handle.exception)
+        self.assertTrue(handle.done_event.is_set())
+        self.assertIsNotNone(handle.thread)
+        self.assertFalse(handle.thread.is_alive())
+        self.assertEqual(handle.result["fetch_result"]["fetch_status"], "cancelled")
+        self.assertEqual(
+            handle.result["fetch_result"]["cancel_reason"],
+            "application_shutdown",
+        )
+        self.assertIs(
+            handle.result["fetch_result"]["video_info_raw_response"],
+            video_response,
+        )
+        self.assertEqual(
+            handle.result["fetch_result"]["channel_info_raw_response"], {}
+        )
+        self.assertEqual(
+            handle.result["fetch_result"]["comment_threads_raw_responses"], []
+        )
+
+        save_json.assert_called_once()
+        self.assertIs(save_json.call_args.args[0], video_response)
+        self.assertEqual(
+            handle.result["saved_files"],
+            handle.partial_result["saved_files"],
+        )
+        self.assertEqual(len(handle.result["saved_files"]), 1)
+        self.assertEqual(handle.result["saved_files"][0]["kind"], "video_info")
+        self.assertTrue(handle.result["saved_files"][0]["success"])
+        shutdown_summary.assert_called_once()
+
+        self.assertIsNone(app.worker_handle)
+        self.assertEqual(app._shutdown_state, "closed")
+        self.assertTrue(app.gui_request_queue.empty())
+        self.assertEqual(app._pending_modal_requests, [])
+        self.assertFalse(app._dialog_active)
+        self.assertIsNone(app._gui_poll_after_id)
+        self.assertTrue(self.root.winfo_exists())
+
+
 if __name__ == "__main__":
     unittest.main()
