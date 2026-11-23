@@ -50,7 +50,7 @@ class Stage4AppTestCase(unittest.TestCase):
 class ShutdownStateTests(Stage4AppTestCase):
     """S4-01～S4-07：終了確認と状態遷移。"""
 
-    def test_s4_01_shutdown_without_worker_destroys_root_immediately(self):
+    def test_s4_01_shutdown_without_worker_quits_mainloop_immediately(self):
         app = self.make_app()
 
         with patch.object(main.messagebox, "askyesnocancel") as ask:
@@ -58,7 +58,8 @@ class ShutdownStateTests(Stage4AppTestCase):
 
         ask.assert_not_called()
         self.assertEqual(app._shutdown_state, "closed")
-        app.master.destroy.assert_called_once_with()
+        app.master.quit.assert_called_once_with()
+        app.master.destroy.assert_not_called()
         self.assertFalse(app._shutdown_notifications)
 
     def test_s4_02_yes_selects_partial_save_and_cancels_worker(self):
@@ -481,7 +482,7 @@ class ShutdownWorkerRaceTests(Stage4AppTestCase):
         self.assertFalse(handle.exception_notification_queued)
         app.master.destroy.assert_not_called()
 
-    def test_s4_19_shutdown_finalizes_only_after_worker_thread_has_joined(self):
+    def test_s4_19_shutdown_quits_mainloop_only_after_worker_thread_has_joined(self):
         app = self.make_app()
         handle = self.make_running_handle(app)
         handle.done_event.set()
@@ -494,7 +495,9 @@ class ShutdownWorkerRaceTests(Stage4AppTestCase):
 
         self.assertIsNone(app.worker_handle)
         self.assertEqual(app._shutdown_state, "closed")
-        app.master.destroy.assert_called_once_with()
+        handle.thread.join.assert_called_once_with(timeout=0)
+        app.master.quit.assert_called_once_with()
+        app.master.destroy.assert_not_called()
         self.assertEqual(app.open_json_button.config.call_args.kwargs["state"], main.tk.DISABLED)
         self.assertEqual(app.scrape_button.config.call_args.kwargs["state"], main.tk.NORMAL)
 
@@ -1040,7 +1043,7 @@ class ShutdownNotificationAndConfirmationTests(Stage4AppTestCase):
             [request.payload for request in notices],
         )
 
-    def test_s4_34_shutdown_summary_is_shown_once_before_root_destroy(self):
+    def test_s4_34_shutdown_summary_is_shown_once_before_mainloop_quits(self):
         app = self.make_app()
         app._shutdown_state = "stopping"
         app._shutdown_notifications = [
@@ -1057,21 +1060,22 @@ class ShutdownNotificationAndConfirmationTests(Stage4AppTestCase):
             self.assertIn("[ERROR] Error title", message)
             self.assertIn("Error body", message)
 
-        def destroy_root():
-            order.append("destroy")
+        def quit_mainloop():
+            order.append("quit")
 
-        app.master.destroy.side_effect = destroy_root
+        app.master.quit.side_effect = quit_mainloop
         with patch.object(main.messagebox, "showinfo", side_effect=show_summary) as show:
             app._finalize_shutdown()
             app._finalize_shutdown()
 
         show.assert_called_once()
-        self.assertEqual(order, ["summary", "destroy"])
+        self.assertEqual(order, ["summary", "quit"])
         self.assertTrue(app._shutdown_summary_shown)
         self.assertEqual(app._shutdown_state, "closed")
-        app.master.destroy.assert_called_once_with()
+        app.master.quit.assert_called_once_with()
+        app.master.destroy.assert_not_called()
 
-    def test_s4_35_shutdown_without_notifications_skips_summary(self):
+    def test_s4_35_shutdown_without_notifications_skips_summary_and_quits_mainloop(self):
         app = self.make_app()
         app._shutdown_state = "stopping"
 
@@ -1081,7 +1085,8 @@ class ShutdownNotificationAndConfirmationTests(Stage4AppTestCase):
         show.assert_not_called()
         self.assertFalse(app._shutdown_summary_shown)
         self.assertEqual(app._shutdown_state, "closed")
-        app.master.destroy.assert_called_once_with()
+        app.master.quit.assert_called_once_with()
+        app.master.destroy.assert_not_called()
 
     def test_s4_36_unanswered_confirmation_is_released_by_shutdown(self):
         app = self.make_app()
