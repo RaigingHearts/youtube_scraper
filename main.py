@@ -588,7 +588,7 @@ class YouTubeCommentScraperApp:
                 )
 
     def _finalize_shutdown(self, completed_handle=None):
-        """ワーカーとGUI要求の回収後、通知サマリー、Handle解放、root破棄を行う。"""
+        """ワーカーとGUI要求の回収後、通知サマリーとHandle解放を行い、mainloopを終了する。"""
         if self._shutdown_state == "closed":
             return
         if self.worker_handle is not None and self.worker_handle is not completed_handle:
@@ -635,11 +635,13 @@ class YouTubeCommentScraperApp:
             self.worker_handle = None
         self._shutdown_state = "closed"
         try:
-            self.master.destroy()
+            # 実行中のTkコールバックからrootを破棄せず、mainloopだけを終了する。
+            # root.destroy()はmainloopから戻ったmain()側で実行する。
+            self.master.quit()
         except tk.TclError:
-            logger.debug("rootは既に破棄されています。")
+            logger.debug("mainloopは既に終了しています。")
         except Exception:
-            logger.exception("rootの破棄中に予期しない例外が発生しました。")
+            logger.exception("mainloopの終了要求中に予期しない例外が発生しました。")
 
     def _poll_gui_requests(self):
         """最大50件ずつGUI要求を処理し、残件があれば次回も確認する。"""
@@ -976,8 +978,18 @@ def main() -> None:
     logger_config.configure_logging()
     settings_manager.initialize_settings()
     root = tk.Tk()
-    YouTubeCommentScraperApp(root)
-    root.mainloop()
+    try:
+        YouTubeCommentScraperApp(root)
+        root.mainloop()
+    finally:
+        # Tkコールバックの実行中にrootを破棄しないよう、
+        # mainloopが戻った後にウィンドウ資源を解放する。
+        try:
+            root.destroy()
+        except tk.TclError:
+            logger.debug("rootは既に破棄されています。")
+        except Exception:
+            logger.exception("rootの破棄中に予期しない例外が発生しました。")
 
 
 if __name__ == "__main__":

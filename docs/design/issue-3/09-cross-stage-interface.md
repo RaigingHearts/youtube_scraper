@@ -64,11 +64,12 @@ cancel_reasonは補足情報であり、既存のfetch_statusや返却タプル�
 
 ## 9. 取得タスクの結果契約
 _scrape_comments_task()はGUI所有状態を変更せず、結果を戻り値として返す。取得結果は少なくとも次を含む構造化データとする。
-- fetch_result：APIクライアントのresult_data
+- fetch_result：APIクライアントのresult_data。キャンセル理由が該当する場合は、APIクライアント契約に従って `fetch_result["cancel_reason"]` に格納する。キャンセル以外の結果ではこのキーを追加しない。
 - fetched_count：取得件数
 - total_expected：予想総件数
 - saved_files：保存を試みたファイルごとの結果一覧
-- cancel_reason：該当する場合のキャンセル理由
+
+`cancel_reason` は取得タスク結果の最上位キーではなく、`fetch_result` に含まれる補足情報である。これにより、APIクライアントが返す `result_data` の契約（§8）と、`_scrape_comments_task()` が返すタスク結果の構造を一意にする。
 
 saved_filesの各要素はkind、path、successを持ち、失敗時はerror等の補足を持つ。kindはvideo_info、channel_info、comments、repliesのいずれかに固定し、pathは保存先の完全なパス、successは実際の保存成否を表す。保存結果を返却構造に集約し、GUI属性last_saved_*_file_path等はmain.pyがsuccess=Trueかつ実際に保存された結果からのみ更新する。失敗・未試行ファイルを保存済みとして扱わず、少なくとも1件の有効な保存済みファイルがある場合は対応するファイルを開くGUI操作を利用可能にする。resultはこの取得タスク結果を保持する。未処理例外はWorkerHandle.exceptionに保持する。
 
@@ -134,3 +135,17 @@ Stage 3実装で確定した実コード上の契約を記録する。
 - 確認・通知モーダルはGUI側で直列化し、表示中の再入要求をFIFO保留列に置く。終了処理開始後は保留中の古い確認要求を新たに表示しない。
 
 上記はStage 3の実装反映記録であり、Issue #20による新規テスト実装・実行の完了を示すものではない。実装とテストの差異が見つかった場合は、Issue #20でテスト結果を記録し、必要に応じて本書とStage設計・テスト仕様を同期修正する。
+
+
+## 18. Issue #20 Stage 3テスト検証結果と残存統合確認（2026-11-23）
+
+利用者報告によるWindows 7 SP1（AMD64）／Python 3.8.10／標準 `unittest` の実行結果：
+
+- Stage 3専用：24 tests、0.145秒、`OK`。
+- 既存 `test_main`：25 tests、0.768秒、`OK`。
+- リポジトリ全体 `python -m unittest discover -v`：135 tests、2.198秒、`OK`。
+- 対象ブランチ `feature/issue-20-stage-1-tests`、対象コミット `562c3f0`。Git作業ツリーのtracked filesに差分はなく、`git diff --check` はエラーなし。
+
+Stage 3テストは、WorkerHandle確認要求の登録・回答・解除、終了競合、モーダルFIFOと例外復旧、APIクライアントのGUI非依存、通知の分類・重複防止、タスクへの継続確認引き渡しを対象とする。キャンセル理由 `application_shutdown` および `confirmation_unavailable` がタスク結果の `fetch_result["cancel_reason"]` に伝達されることを追加確認した。
+
+**残存する統合確認：** 実Tkイベントループ上でStage 3の確認要求・ダイアログ・FIFOモーダル処理を組み合わせる専用シナリオは未実施である。Stage 1・2の実Tkイベントループ試験をStage 3のGUI統合試験の代替とみなさない。Stage 1～4全体統合検証でこのシナリオを実施し、成功・失敗・未実施の別を記録する。実デスクトップ受け入れ確認も全体統合工程の対象として残す。

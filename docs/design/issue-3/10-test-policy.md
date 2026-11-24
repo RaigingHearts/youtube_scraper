@@ -126,3 +126,120 @@ Issue #3のStage 1～4の実装作業中は、各Stageの新規テスト仕様�
 - 結果：50 tests、1.548秒、`OK`
 
 これはPR #27マージ後の既存回帰テストの再実行結果である。Stage 1～4の新規テスト、GUI統合テスト、実デスクトップ環境での受け入れ確認を実施済みとするものではない。
+
+
+### 6.5 Stage 1新規テスト実装後の実行結果（2026-11-22）
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`46c653cb522a70d62db08ecedd3a1d002850a788`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。実Tkイベントループを利用可能。
+- 追加した実イベントループ統合テスト：1 test、0.305秒、`OK`
+- `python -m unittest test_main -v`：25 tests、0.828秒、`OK`
+- `python -m unittest discover -v`：91 tests、1.615秒、`OK`
+- `git diff --check`：エラーなし。ローカルブランチはorigin追跡ブランチと同期し、未追跡ファイル `issue3-comment.md` は維持。
+- 全体91件にはStage 1新規テストおよび既存テストが含まれる。実API通信は行わず、実Tkイベントループ統合テストではAPI通信をモック化した。
+- これはStage 1新規テストの初回実行結果である。実統合テストにファイル保存関数の未呼出を明示するガードを追加したコミット `ccb2bc0598431d9231038871d0264562045d8cc7` はこの実行対象に含まれない。ガード追加後の最終再実行結果は§6.6に記録する。
+- Stage 2～4の新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認は別工程として未完了である。
+
+
+### 6.6 ファイル保存ガード追加後のStage 1最終再実行（2026-11-22）
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`ef661789cb964a0600f095effb3da981e23f04d5`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。実Tkイベントループを利用可能。
+- 追加した実イベントループ統合テスト：1 test、0.280秒、`OK`
+- `python -m unittest test_main -v`：25 tests、0.785秒、`OK`
+- `python -m unittest discover -v`：91 tests、1.556秒、`OK`
+- `git diff --check`：エラーなし。ローカルブランチとorigin追跡ブランチは対象コミットで同期。未追跡ファイル `issue3-comment.md` は維持。
+- 統合テストでは実Tkイベントループと実ワーカー経路を使用し、YouTube APIと `json_data_handler.save_json_to_file` をモック化した。進捗1件・通知55件のGUI要求、payload内のTkinterオブジェクト不在、メインスレッドでのGUI更新・通知表示、未処理要求がなくなってからのWorkerHandle解放を確認した。保存関数は `assert_not_called()` により未呼出を検証した。
+- Stage 1テスト用2ファイルは計41テストケース（`test_tk_async_tasks.py` 16件、`test_main.py` 25件）。全体91件には既存回帰テスト50件を含む。なお `test_main.py` のうち3テストにはStage 2の進捗・通知の実処理接続または取得結果・保存結果GUI反映に関する補助的なクロスStage回帰確認が含まれる。このうち実イベントループ統合テストはStage 1のキュー処理・完了順序も検証する。Stage 2側のアサーションはStage 1の合否条件やStage 2新規テスト群の完了には算入しない（Stage 1仕様 §6参照）。
+- 例外・警告ログは異常系テストによる想定出力であり、全件成功。
+- 本結果はStage 1テスト群の最終再実行結果である。Stage 2～4専用新規テスト、Stage間統合テスト、実デスクトップ受け入れ確認は未完了であり、別工程で実施する。
+
+
+### 6.7 Stage 2新規テスト検証結果（2026-11-23）
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`6c119e531c54c47399b870eac73ba464e89f9e16`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。実Tkイベントループを利用可能。
+- `python -m unittest test_stage2 -v`：20 tests、0.584秒、`OK`。
+- `python -m unittest test_main -v`：25 tests、0.875秒、`OK`。
+- `python -m unittest discover -v`：111 tests、1.964秒、`OK`。
+- Stage 2専用テスト20件のうち2件は、進捗マーカー消費中の更新競合と進捗値のないマーカーの安全な処理を検証する追加テストである。前回失敗した競合テストは、テスト対象アプリケーションに対象WorkerHandleを設定するテスト準備の修正後に成功した。
+- `test_main.py` 25件および全体111件にはStage 2専用テストが重複して含まれるため、件数を合算しない。全体111件は `unittest discover` によるリポジトリ全体の検出・実行件数である。
+- 実行ログに出力された保存失敗・ワーカー例外・GUI要求例外等は、異常系テストによる想定出力であり、対応するテストは成功した。
+- 実API通信は行わず、実Tkイベントループ統合テストは利用者のWindowsデスクトップ環境で実行された。Git同期時には作業ブランチがorigin追跡ブランチと同期し、未追跡ファイル `issue3-comment.md` が保持されたとの報告を受けた。
+- Stage 2専用テスト実行およびStage 2最終横断確認は完了した。Stage 1～4の全体統合検証と実デスクトップ受け入れ確認全体は別途管理する。
+
+
+### 6.8 Stage 3新規テスト検証結果（2026-11-23）
+
+- 実行主体：利用者報告
+- ブランチ：`feature/issue-20-stage-1-tests`
+- 対象コミット：`562c3f0e2c7832ca5fd79af18a28d3cd725527a2`
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`
+- `python -m unittest test_stage3 -v)：24 tests、0.145秒、`OK`
+- `python -m unittest test_main -v)：25 tests、0.768秒、`OK`
+- `python -m unittest discover -v`：135 tests、2.198秒、`OK`
+- `git status -sb`：ローカルブランチとorigin追跡ブランチは同期。tracked filesの変更なし。未追跡ファイル `issue3-comment.md` は維持。
+- `git diff --check`：エラーなし。
+
+Stage 3専用テストは24件。確認要求のEventライフサイクル・競合、モーダルFIFO・例外復旧、APIクライアント境界、通知契約、継続確認のタスク結果への伝達を検証した。追加2件では `application_shutdown` と `confirmation_unavailable` のキャンセル理由が `fetch_result["cancel_reason"]` へ反映されることを確認した。実YouTube API通信は行っていない。全体135件は `unittest discover` の検出・実行数であり、個別テスト群の件数とは重複するため合算しない。
+
+ログに出力された例外・警告は異常系テストの想定出力であり、実行結果は全件成功。
+
+**未実施項目：** Stage 3の確認要求・モーダルFIFOを実Tkイベントループ上で組み合わせる専用GUI統合テスト、および実デスクトップ受け入れ確認は未実施。これらはStage 1～4全体統合検証で別途実施する。全体135件の成功をもって、これらの未実施項目を合格とは扱わない。
+
+
+### 6.9 Stage 4専用テスト検証結果（2026-11-23）
+
+- 実行主体：利用者報告。
+- ブランチ：`feature/issue-20-stage-1-tests`。
+- 対象コミット：`ccd7603eaf939ce9d58e4eb321f325d5bb76ba28`（Stage 4 S4-39テスト準備修正）。
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。実Tkイベントループを利用可能。
+- `python -m unittest test_stage4 -v`：41 tests、0.327秒、`OK`。
+- `python -m unittest test_main -v`：25 tests、1.163秒、`OK`。
+- `python -m unittest discover -v`：176 tests、2.286秒、`OK`。
+- Stage 4専用41件はS4-01～S4-41を対象とする。終了状態、保存判断バリア、ワーカー競合、APIキャンセル境界、部分結果と保存方針、通知・確認要求、モーダル終了境界を検証した。
+- S4-39は実行中WorkerHandleをテスト対象へ設定する準備修正後に成功した。アプリケーションコードの変更はない。
+- 実API通信・実ファイル保存は行っていない。ログに出力されたRuntimeError等は異常系テストの意図的な例外注入による想定出力で、対応テストは成功した。
+- `test_main.py` 25件には実Tkイベントループ統合テストが含まれるが、Stage 4の終了制御全体を実Tkで検証した専用GUI統合テストではない。個別テスト群と全体176件の件数は重複するため合算しない。
+- Stage 4専用制御テストおよび既存回帰テストは合格。Stage 1～4横断の実Tkイベントループ統合テストと実デスクトップ受入確認は未実施であり、別工程として残す。
+- API通信タイムアウトは本Stageの対象外。API `execute()` が戻らない場合は終了待機が継続する。
+
+
+
+### 6.10 Stage 4テストエントリーポイント整理後の再検証（2026-11-23）
+
+- 実行主体：利用者報告。
+- ブランチ：`feature/issue-20-stage-1-tests`。
+- 対象コミット：`ee53142f36d5611b7ae505a269e438baf775348f`（`test_stage4.py` の `unittest.main()` エントリーポイントをファイル末尾の1か所へ統一）。
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
+- `python test_stage4.py -v`：41 tests、0.348秒、`OK`。
+- `python -m unittest test_stage4 -v`：41 tests、0.287秒、`OK`。
+- `python -m unittest test_main -v`：25 tests、0.842秒、`OK`。
+- `python -m unittest discover -v`：176 tests、2.451秒、`OK`。
+- 直接スクリプト実行、モジュール指定実行、全体自動検出のすべてで成功した。テストケース・アサーション・アプリケーションコードの変更はない。
+- 異常系テストによるRuntimeError等のログは想定出力であり、対応テストは成功した。
+- この再検証はStage 4専用制御テストおよび既存回帰テストの成功を示す。Stage 1～4横断の実Tkイベントループ統合テスト、Stage 4終了シナリオ全体の実Tk統合、実デスクトップ受入確認は未完了である。
+
+
+### 6.11 Stage 4終了ライフサイクル修正後の実Tk統合・全体再検証（2026-11-23）
+
+- 実行主体：利用者報告。
+- ブランチ：`feature/issue-20-stage-1-tests`。
+- 対象コミット：`0fe2eac`。
+- 実行環境：Windows 7 SP1（AMD64）、Python 3.8.10、標準 `unittest`。
+- `python -m unittest test_stage4 -v`：41 tests、0.236秒、`OK`。
+- `test_integration.py`：実Tkイベントループ統合テスト3件、全件成功。
+- `python -m unittest discover -v`：181 tests、2.973秒、`OK`。
+- 現行の `test_main.py`：27テスト（以前の25件から、mainloop終了とroot破棄順序を確認する2件を追加）。
+
+実Tk統合テストは、ワーカー確認要求、終了キャンセル後の保留モーダルFIFO再開、終了確定時の確認要求解除・通知サマリー表示を検証した。終了確定テストではmainloop終了前にrootが破棄されないこと、およびTclコールバックの登録・解除状態を診断した。
+
+テスト間に残存するTk after／after_idleコールバックを持ち越さないよう、tearDownでroot破棄前にキャンセルする処理を追加した。診断上、クリーンアップ前の残存コールバックは1件、クリーンアップ後は0件であった。
+
+今回の変更はテストコードとテスト後始末に限定され、アプリケーション実装は変更していない。181件はリポジトリ全体の探索・実行件数であり、Stage 4専用41件や実Tk統合3件を加算するものではない。統合テスト仕様§3～§8の全シナリオと実デスクトップ受入確認は未完了として継続する。
