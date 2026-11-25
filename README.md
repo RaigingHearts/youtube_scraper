@@ -4,6 +4,25 @@ YouTube Data API v3を利用して、指定したYouTube動画の情報、コメ
 
 TkinterによるGUIを備え、動画URLまたは動画IDを指定してコメントを取得できます。取得処理の進捗確認、取得データの保存、ログの確認などを行えます。
 
+## 開発履歴（参考・振り返り）
+
+本表は、実用アプリとしての初期状態から、mainへ取り込まれた主要な機能改善を振り返って整理した参考履歴です。
+
+| 参考バージョン | 開発段階 | 主な内容 |
+|---|---|---|
+| **v1.0.0** | 初期実用版 | GUIから動画情報・コメント・返信を取得し、JSONへ保存する基本アプリ。基準コミット：[ver_1.0](https://github.com/RaigingHearts/youtube_scraper/commit/0862b044389011ea6f07023b3113964c5d26f4e7) |
+| **v1.1.0** | 返信コメントの完全取得 | [PR #8](https://github.com/RaigingHearts/youtube_scraper/pull/8)：返信コメントのページング取得を整備 |
+| **v1.2.0** | 取得状態・進捗の改善 | [PR #9](https://github.com/RaigingHearts/youtube_scraper/pull/9)、[#11](https://github.com/RaigingHearts/youtube_scraper/pull/11)、[#14](https://github.com/RaigingHearts/youtube_scraper/pull/14)：取得状態、累積進捗、コメント無効動画への対応 |
+| **v1.3.0** | 取得品質・共通基盤・安全性 | [PR #16](https://github.com/RaigingHearts/youtube_scraper/pull/16)、[#17](https://github.com/RaigingHearts/youtube_scraper/pull/17)、[#18](https://github.com/RaigingHearts/youtube_scraper/pull/18)：logging統一、コメント重複への対策、ログへの認証情報露出防止 |
+| **v1.4.0** | 入力検証 | [PR #19](https://github.com/RaigingHearts/youtube_scraper/pull/19)：YouTube URL形式の対応拡張と動画ID検証 |
+| **v1.5.0** | GUI処理基盤の改善 | [PR #27](https://github.com/RaigingHearts/youtube_scraper/pull/27)：TkinterのGUI操作をメインスレッドへ集約し、ワーカー・通知・終了処理を整理 |
+| **v1.6.0** | テスト整備 | [PR #28](https://github.com/RaigingHearts/youtube_scraper/pull/28)：ユニットテスト・Tkイベントループ統合テストの整備と検証記録 |
+| **v1.7.0** | 取得中断・例外時の安定化 | [PR #31](https://github.com/RaigingHearts/youtube_scraper/pull/31)、[#32](https://github.com/RaigingHearts/youtube_scraper/pull/32)：クォータ超過時の中断と部分データ保持、例外時のGUI状態復旧 |
+
+この番号は開発経緯を読みやすくするための**遡及的な参考表記**であり、GitHub Releasesや正式なバージョンタグとして公開したものではありません。最初の実用アプリを基準に整理しています。GitHub上の「Initial commit」はLICENSEのみのコミットであるため、アプリの基準点には実用アプリを含む ver_1.0 コミットを採用しています。
+
+PR #21〜#26のリポジトリ整理・設計資料・テスト配置整備は、開発を支える管理・品質基盤の改善として扱い、アプリケーション機能のバージョン番号には個別加算していません。OpenのPR #30も、未マージのため履歴には含めていません。
+
 ## 開発方針・開発環境
 
 本プロジェクトは、旧世代の開発環境を現在も意識的に活用しながら開発・保守を継続しています。
@@ -194,17 +213,26 @@ GUIの「ログを表示」ボタンから内容を確認できます。
 
 ## テスト
 
-一部のモジュールには、Python標準の `unittest` によるテストコードが用意されています。
+プロジェクトのルートディレクトリから、テスト一式を実行できます。
 
-プロジェクトのルートディレクトリから、以下のように個別に実行できます。
+```bash
+python -m unittest discover -v
+```
+
+テストはルート直下の test_*.py と、各モジュール内の test_*.py に配置されています。各テストディレクトリには、unittest discover が再帰的に探索できるよう __init__.py を配置しています。
+
+一部のテストは実Tkイベントループを使用します。Tk GUI環境を利用できない場合、該当する統合テストはスキップされます。
+
+特定のモジュールだけを実行する場合は、例えば以下を使用できます。
 
 ```bash
 python -m unittest module.single.youtube_utils.test_youtube_utils -v
 python -m unittest module.utility.youtube_api_client.test_youtube_api_client -v
 python -m unittest module.utility.logger_config.test_logger_config -v
+python -m unittest module.utility.logger_config.test_log_viewer -v
 ```
 
-テストコードの整備およびテストの自動検出方法については、今後の改善対象です。現時点では、対象モジュールを指定した実行方法を使用してください。
+テストの成功は、実際のYouTube Data APIを利用した取得確認や、実機GUIの手動受入試験を実施したことを意味しません。実API・実機GUIの確認は、必要性と費用対効果を踏まえて別途判断します。
 
 ## 注意事項
 
