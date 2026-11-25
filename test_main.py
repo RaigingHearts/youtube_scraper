@@ -255,21 +255,49 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
                 "total_expected": 4,
             },
         )
-        with patch.object(tk_async_tasks, "_perform_gui_update") as update:
-            app._finish_worker(handle)
+        app._finish_worker(handle)
         self.assertIsNone(app.worker_handle)
         self.assertEqual(app.last_saved_comment_file_path, "output/comments.json")
         app.open_json_button.config.assert_called_once_with(state=tk.NORMAL)
         app.scrape_button.config.assert_called_once_with(state=tk.NORMAL)
-        update.assert_called_once()
+        app.progress_label.config.assert_called_once_with(
+            text="コメント取得処理終了"
+        )
 
     def test_finish_worker_keeps_json_button_disabled_without_saved_files(self):
         app = self.make_app()
         handle = self.make_finished_handle(app, result={"saved_files": []})
-        with patch.object(tk_async_tasks, "_perform_gui_update"):
-            app._finish_worker(handle)
+        app._finish_worker(handle)
         app.open_json_button.config.assert_called_once_with(state=tk.DISABLED)
         self.assertIsNone(app.worker_handle)
+
+    def test_finish_worker_restores_scrape_button_when_json_button_recovery_raises(self):
+        app = self.make_app()
+        handle = self.make_finished_handle(app, result={"saved_files": []})
+        app.open_json_button.config.side_effect = RuntimeError("json button failed")
+
+        with self.assertLogs(main.logger, level="ERROR"):
+            app._finish_worker(handle)
+
+        self.assertIsNone(app.worker_handle)
+        app.scrape_button.config.assert_called_once_with(state=tk.NORMAL)
+        app.progress_label.config.assert_called_once_with(
+            text="コメント取得処理終了"
+        )
+
+    def test_finish_worker_restores_json_button_when_scrape_button_recovery_raises(self):
+        app = self.make_app()
+        handle = self.make_finished_handle(app, result={"saved_files": []})
+        app.scrape_button.config.side_effect = RuntimeError("scrape button failed")
+
+        with self.assertLogs(main.logger, level="ERROR"):
+            app._finish_worker(handle)
+
+        self.assertIsNone(app.worker_handle)
+        app.open_json_button.config.assert_called_once_with(state=tk.DISABLED)
+        app.progress_label.config.assert_called_once_with(
+            text="コメント取得処理終了"
+        )
 
     def test_finish_worker_queues_exception_notification_before_release(self):
         app = self.make_app()
@@ -283,6 +311,40 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
         self.assertEqual(request.kind, "notification")
         self.assertEqual(request.payload["kind"], "error")
         self.assertEqual(request.payload["message"], "worker failed")
+
+    def test_start_gui_preparation_failure_restores_controls_and_allows_retry(self):
+        app = self.make_app()
+        app.api_key = "test-key"
+        app.video_id_entry = MagicMock()
+        app.video_id_entry.get.return_value = "abcdefghijk"
+        # 初回の無効化で一度だけ失敗し、復旧時の設定は成功させる。
+        app.open_json_button.config.side_effect = [
+            RuntimeError("json button preparation failed"),
+            None,
+        ]
+
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(tk_async_tasks, "run_task_in_thread") as run_task:
+                with patch.object(main.tk_notifications, "show_error") as show_error:
+                    with self.assertLogs(main.logger, level="ERROR"):
+                        app._start_scrape_process()
+
+        run_task.assert_not_called()
+        show_error.assert_called_once()
+        self.assertIsNone(app.worker_handle)
+        app.scrape_button.config.assert_any_call(state=tk.DISABLED)
+        app.scrape_button.config.assert_any_call(state=tk.NORMAL)
+        app.open_json_button.config.assert_called_with(state=tk.DISABLED)
+
+        next_handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(
+                tk_async_tasks, "run_task_in_thread", return_value=next_handle
+            ) as retry_task:
+                app._start_scrape_process()
+
+        retry_task.assert_called_once()
+        self.assertIs(app.worker_handle, next_handle)
 
     def test_start_failure_restores_gui_and_keeps_json_button_disabled(self):
         app = self.make_app()
