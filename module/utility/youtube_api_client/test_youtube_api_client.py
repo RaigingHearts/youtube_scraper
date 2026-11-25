@@ -172,6 +172,123 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         self.assertEqual(expected_count, 0)  # 未取得ページが残るため総数は未確定
 
     @patch.object(youtube_api_client, "get_youtube_service")
+    def test_quota_exceeded_in_comment_threads_has_non_continuable_notification(
+        self, get_service
+    ):
+        service = make_service({"items": []}, [])
+        service.commentThreads.return_value.list.return_value.execute.side_effect = HttpError(
+            resp=MagicMock(status=403),
+            content=b'{"error":{"errors":[{"reason":"quotaExceeded"}]}}'
+        )
+        get_service.return_value = service
+        confirm_callback = MagicMock(return_value=True)
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key", "video", confirm_callback=confirm_callback
+        )
+
+        self.assertEqual(data["fetch_status"], "failed")
+        self.assertEqual(fetched_count, 0)
+        self.assertEqual(expected_count, 0)
+        self.assertEqual(data["comment_threads_raw_responses"], [])
+        self.assertEqual(len(data["notifications"]), 1)
+        notification = data["notifications"][0]
+        self.assertEqual(notification["title"], "APIクォータ超過")
+        self.assertIn("今回の取得を中断", notification["message"])
+        self.assertIn("取得済みのデータは保存対象", notification["message"])
+        self.assertIn("再実行", notification["message"])
+        confirm_callback.assert_not_called()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_quota_exceeded_on_next_thread_page_after_continuation_prompt(
+        self, get_service
+    ):
+        first_page = {
+            "pageInfo": {"totalResults": 101},
+            "items": [{
+                "id": f"parent-{index}",
+                "snippet": {
+                    "totalReplyCount": 0,
+                    "topLevelComment": {"id": f"parent-{index}"}
+                }
+            } for index in range(100)],
+            "nextPageToken": "page-2"
+        }
+        quota_error = HttpError(
+            resp=MagicMock(status=403),
+            content=b'{"error":{"errors":[{"reason":"quotaExceeded"}]}}'
+        )
+        service = make_service(first_page, [])
+        service.commentThreads.return_value.list.return_value.execute.side_effect = [
+            first_page, quota_error
+        ]
+        get_service.return_value = service
+        confirm_callback = MagicMock(return_value=True)
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key", "video", confirm_callback=confirm_callback
+        )
+
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(fetched_count, 100)
+        self.assertEqual(expected_count, 0)  # 未取得ページが残るため総数は未確定
+        self.assertEqual(data["comment_threads_raw_responses"], [first_page])
+        self.assertEqual(len(data["notifications"]), 1)
+        notification = data["notifications"][0]
+        self.assertEqual(notification["title"], "APIクォータ超過")
+        self.assertIn("今回の取得を中断", notification["message"])
+        self.assertIn("取得済みのデータは保存対象", notification["message"])
+        confirm_callback.assert_called_once()
+        self.assertEqual(
+            service.commentThreads.return_value.list.call_count, 2
+        )
+
+    @patch.object(youtube_api_client, "get_youtube_service")
+    def test_quota_exceeded_during_reply_fetch_preserves_partial_data(
+        self, get_service
+    ):
+        thread_response = {
+            "pageInfo": {"totalResults": 1},
+            "items": [{
+                "id": "parent-1",
+                "snippet": {
+                    "totalReplyCount": 2,
+                    "topLevelComment": {"id": "parent-1"}
+                }
+            }]
+        }
+        first_reply_page = {
+            "items": [{"id": "reply-1"}],
+            "nextPageToken": "reply-page-2"
+        }
+        quota_error = HttpError(
+            resp=MagicMock(status=403),
+            content=b'{"error":{"errors":[{"reason":"quotaExceeded"}]}}'
+        )
+        service = make_service(thread_response, [first_reply_page, quota_error])
+        get_service.return_value = service
+        confirm_callback = MagicMock(return_value=True)
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key", "video", confirm_callback=confirm_callback
+        )
+
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(fetched_count, 2)
+        self.assertEqual(expected_count, 3)
+        self.assertEqual(data["comment_threads_raw_responses"], [thread_response])
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{"parent_id": "parent-1", "raw_responses": [first_reply_page]}]
+        )
+        notification = data["notifications"][0]
+        self.assertEqual(notification["stage"], "reply_comments")
+        self.assertEqual(notification["title"], "APIクォータ超過")
+        self.assertIn("今回の取得を中断", notification["message"])
+        self.assertIn("取得済みのデータは保存対象", notification["message"])
+        confirm_callback.assert_not_called()
+
+    @patch.object(youtube_api_client, "get_youtube_service")
     def test_reply_page_error_keeps_already_fetched_raw_data(self, get_service):
         thread_response = {
             "pageInfo": {"totalResults": 1},

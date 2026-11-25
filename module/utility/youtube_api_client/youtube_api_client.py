@@ -180,6 +180,18 @@ def fetch_all_comments(
             "stage": stage, "kind": kind, "title": title, "message": message
         })
 
+    def record_quota_notification(stage: str, detail: str) -> None:
+        """クォータ超過は同一取得中に継続できないことを明示する。"""
+        record_notification(
+            stage,
+            "error",
+            "APIクォータ超過",
+            "YouTube Data APIのクォータ上限に達したため、今回の取得を中断しました。\n"
+            "取得済みのデータは保存対象に残します。\n"
+            "クォータが回復してから再実行してください。\n"
+            + detail,
+        )
+
     # 動画情報
     channel_id: Optional[str] = None
     try:
@@ -339,13 +351,20 @@ def fetch_all_comments(
                         message = f"親コメント '{parent_id}' の返信ページ取得中にAPIエラーが発生しました: {error_summary}"
                         record_error("reply_comments", message)
                         logger.error(message)
-                        if _get_api_error_reason(e) == "quotaExceeded":
+                        api_error_reason = _get_api_error_reason(e)
+                        if api_error_reason == "quotaExceeded":
                             logger.critical("返信取得中にAPIクォータ制限に達しました。")
-                        record_notification(
-                            "reply_comments", "error", "返信取得エラー",
-                            f"親コメント '{parent_id}' の返信をすべて取得できませんでした。\n"
-                            f"取得済みの返信データは保存対象に残します。\nエラー概要: {error_summary}",
-                        )
+                            record_quota_notification(
+                                "reply_comments",
+                                f"親コメント '{parent_id}' の返信取得は未完了です。\n"
+                                f"エラー概要: {error_summary}",
+                            )
+                        else:
+                            record_notification(
+                                "reply_comments", "error", "返信取得エラー",
+                                f"親コメント '{parent_id}' の返信をすべて取得できませんでした。\n"
+                                f"取得済みの返信データは保存対象に残します。\nエラー概要: {error_summary}",
+                            )
                         stop_after_current_thread_page = not is_cancelled()
                         break
                     except Exception as e:
@@ -473,12 +492,18 @@ def fetch_all_comments(
                 message = f"YouTubeコメントスレッド取得中にAPIエラーが発生しました: {error_summary}"
                 record_error("comment_threads", message)
                 logger.error(message)
-                if _get_api_error_reason(e) == "quotaExceeded":
+                api_error_reason = _get_api_error_reason(e)
+                if api_error_reason == "quotaExceeded":
                     logger.critical("APIクォータ制限に達しました。")
-                record_notification(
-                    "comment_threads", "error", "APIエラー",
-                    f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\nエラー概要: {error_summary}",
-                )
+                    record_quota_notification(
+                        "comment_threads",
+                        f"コメントスレッドの取得は未完了です。\nエラー概要: {error_summary}",
+                    )
+                else:
+                    record_notification(
+                        "comment_threads", "error", "APIエラー",
+                        f"YouTubeコメントスレッド取得中にエラーが発生しました。\n取得済みデータは保存対象に残します。\nエラー概要: {error_summary}",
+                    )
             break
         except Exception as e:
             error_summary = _safe_exception_summary(e)
