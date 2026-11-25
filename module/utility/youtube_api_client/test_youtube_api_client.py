@@ -208,16 +208,20 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
             "items": [{
                 "id": "parent-1",
                 "snippet": {
-                    "totalReplyCount": 1,
+                    "totalReplyCount": 2,
                     "topLevelComment": {"id": "parent-1"}
                 }
             }]
         }
-        service = make_service(thread_response, [])
-        service.comments.return_value.list.return_value.execute.side_effect = HttpError(
+        first_reply_page = {
+            "items": [{"id": "reply-1"}],
+            "nextPageToken": "reply-page-2"
+        }
+        quota_error = HttpError(
             resp=MagicMock(status=403),
             content=b'{"error":{"errors":[{"reason":"quotaExceeded"}]}}'
         )
+        service = make_service(thread_response, [first_reply_page, quota_error])
         get_service.return_value = service
         confirm_callback = MagicMock(return_value=True)
 
@@ -226,10 +230,13 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         )
 
         self.assertEqual(data["fetch_status"], "partial")
-        self.assertEqual(fetched_count, 1)
-        self.assertEqual(expected_count, 2)
+        self.assertEqual(fetched_count, 2)
+        self.assertEqual(expected_count, 3)
         self.assertEqual(data["comment_threads_raw_responses"], [thread_response])
-        self.assertEqual(data["comment_replies_raw_responses"], [])
+        self.assertEqual(
+            data["comment_replies_raw_responses"],
+            [{"parent_id": "parent-1", "raw_responses": [first_reply_page]}]
+        )
         notification = data["notifications"][0]
         self.assertEqual(notification["stage"], "reply_comments")
         self.assertEqual(notification["title"], "APIクォータ超過")
