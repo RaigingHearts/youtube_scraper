@@ -272,7 +272,7 @@ class YouTubeCommentScraperApp:
         result_data, fetched_count, total_expected = youtube_api_client.fetch_all_comments(
             api_key,
             video_id,
-            progress_callback=progress_callback,
+            progress_callback=progress_callback, # type: ignore
             confirm_callback=confirm_callback,
             cancel_event=worker_handle.cancel_event,
         )
@@ -965,7 +965,7 @@ class YouTubeCommentScraperApp:
                 continue
             kind = record.get("kind")
             path = record.get("path")
-            attribute = path_attributes.get(kind)
+            attribute = path_attributes.get(kind) # type: ignore
             if attribute is None or not isinstance(path, str) or not path:
                 logger.warning("不正な保存結果レコードを無視しました: %r", record)
                 continue
