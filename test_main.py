@@ -321,6 +321,7 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
         app.open_json_button.config.side_effect = [
             RuntimeError("json button preparation failed"),
             None,
+            None,
         ]
 
         with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
