@@ -706,9 +706,19 @@ class Stage2RealEventLoopIntegrationTests(unittest.TestCase):
                                 )
 
         self.assertEqual(save_file.call_count, 2)
+        # _perform_gui_update is used for startup reset and worker progress.
+        # Completion restoration now updates each widget independently so that
+        # one widget failure cannot prevent recovery of the others.
         self.assertEqual(
             progress_thread_ids,
-            [self.main_thread_id, self.main_thread_id, self.main_thread_id],
+            [self.main_thread_id, self.main_thread_id],
+        )
+        self.app.progress_label.config.assert_any_call(
+            text="コメント取得処理終了"
+        )
+        self.app.progress_bar.stop.assert_called()
+        self.app.progress_bar.config.assert_any_call(
+            mode="determinate", maximum=100, value=100
         )
         self.assertEqual(
             notification_thread_ids,
