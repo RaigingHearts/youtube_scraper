@@ -200,6 +200,50 @@ class FetchAllCommentsReplyTests(unittest.TestCase):
         confirm_callback.assert_not_called()
 
     @patch.object(youtube_api_client, "get_youtube_service")
+    def test_quota_exceeded_on_next_thread_page_after_continuation_prompt(
+        self, get_service
+    ):
+        first_page = {
+            "pageInfo": {"totalResults": 101},
+            "items": [{
+                "id": f"parent-{index}",
+                "snippet": {
+                    "totalReplyCount": 0,
+                    "topLevelComment": {"id": f"parent-{index}"}
+                }
+            } for index in range(100)],
+            "nextPageToken": "page-2"
+        }
+        quota_error = HttpError(
+            resp=MagicMock(status=403),
+            content=b'{"error":{"errors":[{"reason":"quotaExceeded"}]}}'
+        )
+        service = make_service(first_page, [])
+        service.commentThreads.return_value.list.return_value.execute.side_effect = [
+            first_page, quota_error
+        ]
+        get_service.return_value = service
+        confirm_callback = MagicMock(return_value=True)
+
+        data, fetched_count, expected_count = youtube_api_client.fetch_all_comments(
+            "key", "video", confirm_callback=confirm_callback
+        )
+
+        self.assertEqual(data["fetch_status"], "partial")
+        self.assertEqual(fetched_count, 100)
+        self.assertEqual(expected_count, 0)  # 未取得ページが残るため総数は未確定
+        self.assertEqual(data["comment_threads_raw_responses"], [first_page])
+        self.assertEqual(len(data["notifications"]), 1)
+        notification = data["notifications"][0]
+        self.assertEqual(notification["title"], "APIクォータ超過")
+        self.assertIn("今回の取得を中断", notification["message"])
+        self.assertIn("取得済みのデータは保存対象", notification["message"])
+        confirm_callback.assert_called_once()
+        self.assertEqual(
+            service.commentThreads.return_value.list.call_count, 2
+        )
+
+    @patch.object(youtube_api_client, "get_youtube_service")
     def test_quota_exceeded_during_reply_fetch_preserves_partial_data(
         self, get_service
     ):
