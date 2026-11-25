@@ -274,7 +274,10 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
     def test_finish_worker_restores_scrape_button_when_json_button_recovery_raises(self):
         app = self.make_app()
         handle = self.make_finished_handle(app, result={"saved_files": []})
-        app.open_json_button.config.side_effect = RuntimeError("json button failed")
+        app.open_json_button.config.side_effect = [
+            RuntimeError("json button failed"),
+            None,
+        ]
 
         with self.assertLogs(main.logger, level="ERROR"):
             app._finish_worker(handle)
@@ -284,6 +287,19 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
         app.progress_label.config.assert_called_once_with(
             text="コメント取得処理終了"
         )
+
+        # JSONボタンの一時的な復旧失敗があっても、取得ボタンから再取得できる。
+        app.api_key = "test-key"
+        app.video_id_entry = MagicMock()
+        app.video_id_entry.get.return_value = "abcdefghijk"
+        next_handle = tk_async_tasks.WorkerHandle(app.gui_request_queue)
+        with patch.object(main.youtube_utils, "is_valid_video_id", return_value=True):
+            with patch.object(
+                tk_async_tasks, "run_task_in_thread", return_value=next_handle
+            ) as run_task:
+                app._start_scrape_process()
+        run_task.assert_called_once()
+        self.assertIs(app.worker_handle, next_handle)
 
     def test_finish_worker_restores_json_button_when_scrape_button_recovery_raises(self):
         app = self.make_app()
@@ -404,6 +420,11 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
         handle = self.make_finished_handle(
             app, exception=RuntimeError("worker failed")
         )
+        handle.partial_result["saved_files"].append({
+            "kind": "comments",
+            "path": "output/partial-comments.json",
+            "success": True,
+        })
 
         with self.assertLogs(main.logger, level="ERROR"):
             app._finish_worker(handle)
@@ -422,8 +443,11 @@ class WorkerLifecycleTests(YouTubeCommentScraperAppTestCase):
         app._finish_worker(handle)
 
         self.assertIsNone(app.worker_handle)
+        self.assertEqual(
+            app.last_saved_comment_file_path, "output/partial-comments.json"
+        )
         app.scrape_button.config.assert_called_once_with(state=tk.NORMAL)
-        app.open_json_button.config.assert_called_once_with(state=tk.DISABLED)
+        app.open_json_button.config.assert_called_once_with(state=tk.NORMAL)
 
 
 class TkEventLoopIntegrationTests(unittest.TestCase):
