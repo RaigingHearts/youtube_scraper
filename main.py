@@ -176,33 +176,39 @@ class YouTubeCommentScraperApp:
             logger.warning("不正な形式の動画IDが入力されました。")
             return
 
-        # GUIの状態を更新
-        self.scrape_button.config(state=tk.DISABLED)
-        self.open_json_button.config(state=tk.DISABLED)
-        tk_async_tasks._perform_gui_update(self.progress_label, self.progress_bar, 0, 0, "コメント取得中...") # 初期化メッセージ
-        self.comment_count_label.config(text="取得コメント数: 0 / 0") # カウントもリセット
-
-        self.last_saved_comment_file_path = None
-        self.last_saved_video_info_file_path = None
-        self.last_saved_channel_info_file_path = None
-        self.last_saved_replies_file_path = None
-
-        # WorkerHandleを保持し、完了・例外・GUI要求をメインスレッドで回収する。
+        # GUI状態の変更とワーカー起動を同じ例外境界で扱う。
+        # 起動前のウィジェット更新で失敗した場合も、操作可能な状態へ戻す。
         try:
+            self.scrape_button.config(state=tk.DISABLED)
+            self.open_json_button.config(state=tk.DISABLED)
+            tk_async_tasks._perform_gui_update(
+                self.progress_label, self.progress_bar, 0, 0, "コメント取得中..."
+            )
+            self.comment_count_label.config(text="取得コメント数: 0 / 0")
+
+            self.last_saved_comment_file_path = None
+            self.last_saved_video_info_file_path = None
+            self.last_saved_channel_info_file_path = None
+            self.last_saved_replies_file_path = None
+
+            # WorkerHandleを保持し、完了・例外・GUI要求をメインスレッドで回収する。
             self.worker_handle = tk_async_tasks.run_task_in_thread(
                 self._scrape_comments_task,
                 self.gui_request_queue,
                 video_id
             )
         except Exception as exc:
-            logger.exception("ワーカーの起動に失敗しました。")
-            self.scrape_button.config(state=tk.NORMAL)
-            # 保存先パスは起動前にクリア済みのため、JSONボタンは無効のままにする。
-            self.open_json_button.config(state=tk.DISABLED)
-            tk_async_tasks._perform_gui_update(
-                self.progress_label, self.progress_bar, 0, 0, "準備完了"
+            logger.exception("コメント取得タスクの開始準備またはワーカー起動に失敗しました。")
+            self.worker_handle = None
+            self._restore_gui_controls(
+                json_enabled=False,
+                progress_message="準備完了",
+                count_text="取得コメント数: 0 / 0",
             )
-            tk_notifications.show_error("起動失敗", str(exc), parent=self.master)
+            try:
+                tk_notifications.show_error("起動失敗", str(exc), parent=self.master)
+            except Exception:
+                logger.exception("ワーカー起動失敗の通知表示にも失敗しました。")
 
     def _scrape_comments_task(self, worker_handle: tk_async_tasks.WorkerHandle, video_id: str):
         """
@@ -841,6 +847,66 @@ class YouTubeCommentScraperApp:
         finally:
             self._processing_pending_modal_requests = False
 
+    def _attempt_gui_recovery(self, description: str, callback) -> None:
+        """一つのGUI復旧操作の失敗を隔離し、後続の復旧操作を継続する。"""
+        try:
+            callback()
+        except Exception:
+            logger.exception("%s", description)
+
+    def _restore_gui_controls(
+        self,
+        json_enabled: bool,
+        progress_message: str,
+        count_text: Optional[str] = None,
+        completed: bool = False,
+    ) -> None:
+        """各ウィジェットを独立して復旧し、一つの失敗で他の復旧を妨げない。"""
+        self._attempt_gui_recovery(
+            "JSONファイルボタンの状態復旧に失敗しました。",
+            lambda: self.open_json_button.config(
+                state=tk.NORMAL if json_enabled else tk.DISABLED
+            ),
+        )
+        self._attempt_gui_recovery(
+            "コメント取得ボタンの状態復旧に失敗しました。",
+            lambda: self.scrape_button.config(state=tk.NORMAL),
+        )
+        self._attempt_gui_recovery(
+            "進捗バーの停止に失敗しました。",
+            self.progress_bar.stop,
+        )
+        self._attempt_gui_recovery(
+            "進捗ラベルの状態復旧に失敗しました。",
+            lambda: self.progress_label.config(text=progress_message),
+        )
+
+        if completed:
+            try:
+                maximum = self.progress_bar["maximum"]
+            except Exception:
+                logger.exception("進捗バーの最大値取得に失敗しました。")
+                maximum = 0
+            self._attempt_gui_recovery(
+                "完了後の進捗バー復旧に失敗しました。",
+                lambda: self.progress_bar.config(
+                    mode="determinate", maximum=maximum, value=maximum
+                ),
+            )
+        else:
+            self._attempt_gui_recovery(
+                "待機状態の進捗バー復旧に失敗しました。",
+                lambda: self.progress_bar.config(
+                    mode="determinate", value=0
+                ),
+            )
+
+        if count_text is not None:
+            self._attempt_gui_recovery(
+                "取得件数表示の復旧に失敗しました。",
+                lambda: self.comment_count_label.config(text=count_text),
+            )
+
     def _finish_worker(self, handle: tk_async_tasks.WorkerHandle):
         """ワーカー結果・部分保存結果をメインスレッドで回収し、GUI状態を復旧する。"""
         if self.worker_handle is not handle or not handle.done_event.is_set():
@@ -908,6 +974,7 @@ class YouTubeCommentScraperApp:
 
         if handle.exception is None and "total_expected" in result:
             self.total_comments_expected = result["total_expected"]
+        count_text = None
         if handle.exception is None and "fetched_count" in result:
             fetched_count = result["fetched_count"]
             total_expected = result.get("total_expected")
@@ -916,33 +983,21 @@ class YouTubeCommentScraperApp:
                 if total_expected is not None
                 else "取得コメント数: {} / 確定待ち".format(fetched_count)
             )
-            try:
-                self.comment_count_label.config(text=count_text)
-            except Exception:
-                logger.exception("取得件数表示の復旧に失敗しました。")
 
-        # 例外通知は上でGUI要求キューへ登録済み。ここでは結果回収とGUI復旧だけを行う。
-        try:
-            # 例外終了時もpartial_resultから復元した保存ファイルを利用可能にする。
-            self.open_json_button.config(
-                state=tk.NORMAL if valid_saved_paths else tk.DISABLED
-            )
-            self.scrape_button.config(state=tk.NORMAL)
-            maximum = self.progress_bar["maximum"]
-            tk_async_tasks._perform_gui_update(
-                self.progress_label,
-                self.progress_bar,
-                maximum,
-                maximum,
-                "コメント取得処理終了",
-            )
-        except Exception:
-            logger.exception("ワーカー完了後のGUI状態復旧に失敗しました。")
-        finally:
-            if self._shutdown_state in ("stopping", "complete"):
-                self._shutdown_state = "complete"
-            else:
-                self.worker_handle = None
+        # 例外通知は上でGUI要求キューへ登録済み。各ウィジェットを独立して復旧する。
+        # 例外終了時もpartial_resultから復元した保存ファイルを利用可能にする。
+        self._restore_gui_controls(
+            json_enabled=bool(valid_saved_paths),
+            progress_message="コメント取得処理終了",
+            count_text=count_text,
+            completed=True,
+        )
+
+        # GUI復旧の一部が失敗しても、ワーカー参照を保持し続けない。
+        if self._shutdown_state in ("stopping", "complete"):
+            self._shutdown_state = "complete"
+        else:
+            self.worker_handle = None
 
         if self._shutdown_state == "complete":
             self._finalize_shutdown(completed_handle=handle)
